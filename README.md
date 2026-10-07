@@ -24,11 +24,9 @@ Copy the addon into your WoW Forever `Interface/AddOns/MirraThreat/` folder
 
 ## Commands
 
-| Command     | Description                    |
-|-------------|--------------------------------|
-| `/mt`       | Open the settings              |
-| `/mt tank`  | Switch to tank colors          |
-| `/mt dps`   | Switch to DPS / healer colors  |
-| `/mt debug` | Print debug information        |
-
-`/mthreat` works as an alias for `/mt`.
+| Command          | Description                    |
+|------------------|--------------------------------|
+| `/mthreat`       | Open the settings              |
+| `/mthreat tank`  | Switch to tank colors          |
+| `/mthreat dps`   | Switch to DPS / healer colors  |
+| `/mthreat debug` | Print debug information        |

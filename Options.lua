@@ -376,7 +376,7 @@ local function BuildPanel()
 
     local hint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     hint:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -14)
-    hint:SetText("Commands: /mt tank, /mt dps, /mt debug")
+    hint:SetText("Commands: /mthreat tank, /mthreat dps, /mthreat debug")
 
     panel:SetScript("OnShow", RefreshAll)
 end

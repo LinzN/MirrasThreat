@@ -480,7 +480,6 @@ local function Print(msg)
 end
 
 SLASH_MIRRATHREAT1 = "/mthreat"
-SLASH_MIRRATHREAT2 = "/mt"
 SlashCmdList["MIRRATHREAT"] = function(msg)
     msg = strlower(strtrim(msg or ""))
     if not ns.db then return end
@@ -504,6 +503,6 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end
     else
-        Print("commands: /mt (options), /mt tank, /mt dps, /mt debug")
+        Print("commands: /mthreat (options), /mthreat tank, /mthreat dps, /mthreat debug")
     end
 end

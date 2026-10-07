@@ -104,6 +104,29 @@ end
 -- Threat widget (used on nameplates and in the options preview)
 ---------------------------------------------------------------------------
 
+-- How the bar gets its color without ever touching a secret color value:
+--
+--   bar     StatusBar 0..100, value = threat, fixed "low" color
+--   warnBar StatusBar warnAt-1..warnAt, value = threat, fixed "warning" color
+--   highBar StatusBar 99..100,          value = threat, fixed "high" color
+--
+-- warnBar and highBar are anchored to the fill texture of `bar`, so they are
+-- exactly as wide as the current threat. Because of their narrow value range
+-- they are either completely empty (threat below the threshold) or completely
+-- full (threat at/above it) and then paint over the fill below them.
+-- Only StatusBar:SetValue() receives the (possibly secret) threat value, which
+-- the client explicitly allows. No comparison, no color math, no grey fallback.
+
+local function CreateZoneBar(w, level)
+    local b = CreateFrame("StatusBar", nil, w)
+    b:SetFrameLevel(w.bar:GetFrameLevel() + level)
+    b:SetStatusBarTexture(BAR_TEXTURE)
+    b:SetPoint("TOPLEFT", w.bar:GetStatusBarTexture(), "TOPLEFT")
+    b:SetPoint("BOTTOMRIGHT", w.bar:GetStatusBarTexture(), "BOTTOMRIGHT")
+    b:SetValue(0)
+    return b
+end
+
 function ns.CreateWidget(parent)
     local w = CreateFrame("Frame", nil, parent)
     w:SetFrameStrata(parent:GetFrameStrata())
@@ -128,22 +151,25 @@ function ns.CreateWidget(parent)
     w.bar:SetMinMaxValues(0, 100)
     w.bar:SetValue(0)
 
-    -- subtle top highlight for a bit of depth
-    w.shine = w.bar:CreateTexture(nil, "OVERLAY", nil, 1)
-    w.shine:SetTexture(FLAT)
-    w.shine:SetVertexColor(1, 1, 1, 0.10)
-    w.shine:SetPoint("TOPLEFT")
-    w.shine:SetPoint("TOPRIGHT")
-
-    -- marker at the warning threshold
-    w.tick = w.bar:CreateTexture(nil, "OVERLAY", nil, 2)
-    w.tick:SetTexture(FLAT)
-    w.tick:SetVertexColor(1, 1, 1, 0.35)
-    w.tick:SetWidth(1)
+    w.warnBar = CreateZoneBar(w, 1)
+    w.highBar = CreateZoneBar(w, 2)
 
     w.overlay = CreateFrame("Frame", nil, w)
     w.overlay:SetAllPoints()
-    w.overlay:SetFrameLevel(w.bar:GetFrameLevel() + 2)
+    w.overlay:SetFrameLevel(w.bar:GetFrameLevel() + 5)
+
+    -- subtle top highlight for a bit of depth
+    w.shine = w.overlay:CreateTexture(nil, "ARTWORK", nil, 1)
+    w.shine:SetTexture(FLAT)
+    w.shine:SetVertexColor(1, 1, 1, 0.10)
+    w.shine:SetPoint("TOPLEFT", w.bar, "TOPLEFT")
+    w.shine:SetPoint("TOPRIGHT", w.bar, "TOPRIGHT")
+
+    -- marker at the warning threshold
+    w.tick = w.overlay:CreateTexture(nil, "ARTWORK", nil, 2)
+    w.tick:SetTexture(FLAT)
+    w.tick:SetVertexColor(1, 1, 1, 0.35)
+    w.tick:SetWidth(1)
 
     w.text = w.overlay:CreateFontString(nil, "OVERLAY")
     w.text:SetShadowOffset(1, -1)
@@ -153,6 +179,14 @@ function ns.CreateWidget(parent)
     return w
 end
 
+local function ZoneColors()
+    local db, c = ns.db or ns.defaults, ns.colors
+    if db.mode == "dps" then
+        return c.good, c.warn, c.bad   -- low, warning, high
+    end
+    return c.bad, c.warn, c.good
+end
+
 function ns.LayoutWidget(w)
     local db = ns.db or ns.defaults
     local showBar  = db.style ~= "text"
@@ -160,34 +194,82 @@ function ns.LayoutWidget(w)
 
     w.text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
     w.text:ClearAllPoints()
+    w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
+
+    -- fixed colors per zone, only change when the settings change
+    local low, mid, high = ZoneColors()
+    w.bar:SetStatusBarColor(low[1], low[2], low[3], 1)
+    w.warnBar:SetStatusBarColor(mid[1], mid[2], mid[3], 1)
+    w.highBar:SetStatusBarColor(high[1], high[2], high[3], 1)
+    w.warnBar:SetMinMaxValues(db.warnAt - 1, db.warnAt)
+    w.highBar:SetMinMaxValues(99, 100)
 
     if showBar then
         w:SetSize(db.width, db.height)
         w.border:Show()
         w.bg:Show()
         w.bar:Show()
+        w.warnBar:Show()
+        w.highBar:Show()
         w.shine:SetHeight(math.max(1, math.floor(db.height / 3)))
         w.shine:Show()
+        local x = math.floor((db.width - 2) * db.warnAt / 100)
         w.tick:ClearAllPoints()
-        local inner = db.width - 2
-        w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", math.floor(inner * db.warnAt / 100), 0)
-        w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", math.floor(inner * db.warnAt / 100), 0)
+        w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
+        w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
         w.tick:Show()
-        w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
     else
         w:SetSize(db.width, db.fontSize + 4)
         w.border:Hide()
         w.bg:Hide()
         w.bar:Hide()
-        w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
+        w.warnBar:Hide()
+        w.highBar:Hide()
+        w.shine:Hide()
+        w.tick:Hide()
     end
 
     if showText then w.text:Show() else w.text:Hide() end
     w.layoutStamp = ns.layoutStamp
 end
 
--- Sets value and color. `pct` may be a plain number or a secret number.
-function ns.RenderWidget(w, pct)
+local function SetBarValues(w, pct)
+    w.bar:SetValue(pct)
+    w.warnBar:SetValue(pct)
+    w.highBar:SetValue(pct)
+end
+
+-- Text color for secret values: color curve first, then the tanking flag.
+local function ColorSecretText(w, pct, isTanking)
+    if colorCurve then
+        local ok, err = pcall(function()
+            local c = colorCurve:Evaluate(pct)
+            w.text:SetTextColor(c:GetRGBA())
+        end)
+        if ok then return "curve" end
+        NoteError("Text color (curve)", err)
+    end
+
+    if (IsSecret(isTanking) or isTanking ~= nil) and C_CurveUtil and C_CurveUtil.EvaluateColorFromBoolean then
+        local ok, err = pcall(function()
+            local _, _, high = ZoneColors()
+            local low = (ns.db.mode == "dps") and ns.colors.good or ns.colors.bad
+            local c = C_CurveUtil.EvaluateColorFromBoolean(isTanking,
+                CreateColor(high[1], high[2], high[3], 1),
+                CreateColor(low[1], low[2], low[3], 1))
+            w.text:SetTextColor(c:GetRGBA())
+        end)
+        if ok then return "boolean" end
+        NoteError("Text color (boolean)", err)
+    end
+
+    w.text:SetTextColor(1, 1, 1, 1)
+    return "none"
+end
+
+-- Sets value and color. `pct` may be a plain number or a secret number,
+-- `isTanking` (optional) may be a plain or secret boolean.
+function ns.RenderWidget(w, pct, isTanking)
     if w.layoutStamp ~= ns.layoutStamp then
         ns.LayoutWidget(w)
     end
@@ -195,23 +277,13 @@ function ns.RenderWidget(w, pct)
     if IsSecret(pct) then
         local ok, err = pcall(function()
             w.text:SetText(string.format("%.0f%%", pct))
-            w.bar:SetValue(pct)
+            SetBarValues(w, pct)
         end)
         if not ok then
             NoteError("Secret value", err)
             return false
         end
-
-        w.text:SetTextColor(1, 1, 1, 1)
-        w.bar:SetStatusBarColor(0.6, 0.6, 0.6, 1)
-        if colorCurve then
-            local okc, errc = pcall(function()
-                local c = colorCurve:Evaluate(pct)
-                w.text:SetTextColor(c:GetRGBA())
-                w.bar:SetStatusBarColor(c:GetRGBA())
-            end)
-            if not okc then NoteError("Secret color", errc) end
-        end
+        ns.textColorMethod = ColorSecretText(w, pct, isTanking)
         return true
     end
 
@@ -223,8 +295,7 @@ function ns.RenderWidget(w, pct)
     local c = ns.GetColor(display)
     w.text:SetText(display .. "%")
     w.text:SetTextColor(c[1], c[2], c[3], 1)
-    w.bar:SetValue(math.min(display, 100))
-    w.bar:SetStatusBarColor(c[1], c[2], c[3], 1)
+    SetBarValues(w, math.min(display, 100))
     return true
 end
 
@@ -272,7 +343,7 @@ local function UpdatePlate(plate, unit)
         return
     end
 
-    local _, _, percent = UnitDetailedThreatSituation("player", unit)
+    local isTanking, _, percent = UnitDetailedThreatSituation("player", unit)
 
     -- nil = not on the threat list. issecretvalue(nil) is false, so this is safe.
     if not IsSecret(percent) and percent == nil then
@@ -293,7 +364,7 @@ local function UpdatePlate(plate, unit)
         w.anchor, w.anchorOffset = anchor, ns.db.offsetY
     end
 
-    if ns.RenderWidget(w, percent) then
+    if ns.RenderWidget(w, percent, isTanking) then
         w:Show()
     else
         w:Hide()
@@ -399,6 +470,7 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         print("  Interface: " .. tostring(select(4, GetBuildInfo())))
         print("  Secret values: " .. tostring(issecretvalue ~= nil))
         print("  Color curve: " .. tostring(colorCurve ~= nil))
+        print("  Text color method: " .. tostring(ns.textColorMethod or "-"))
         print("  Last error: " .. tostring(ns.lastError))
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end

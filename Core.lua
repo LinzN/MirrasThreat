@@ -18,7 +18,7 @@ ns.defaults = {
     offsetY  = 0,
     warnAt   = 80,        -- threshold (in %) for the warning color
     hideZero = true,      -- hide the display while threat is 0 %
-    hideSolo = false,     -- only show while in a party or raid
+    hideSolo = true,      -- only show while in a party or raid
 }
 
 ns.colors = {

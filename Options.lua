@@ -328,9 +328,15 @@ local function BuildPanel()
         { text = "Text",       value = "text",    width = 96 },
     }, h, -8)
 
-    h = SectionHeader(panel, "Size & Position", style.first, -18)
+    local align = Segmented(panel, "textAlign", {
+        { text = "Text left",   value = "LEFT",   width = 96 },
+        { text = "Text center", value = "CENTER", width = 96 },
+        { text = "Text right",  value = "RIGHT",  width = 96 },
+    }, style.first, -6)
+
+    h = SectionHeader(panel, "Size & Position", align.first, -18)
     local a = Slider(panel, "width",    "Width",           40, 160, 2, "%d px", h, -10)
-    a = Slider(panel, "height",   "Bar height",       4,  20, 1, "%d px", a, -8)
+    a = Slider(panel, "height",   "Bar height",       6,  24, 1, "%d px", a, -8)
     a = Slider(panel, "fontSize", "Font size",        7,  20, 1, "%d",    a, -8)
     a = Slider(panel, "offsetY",  "Vertical offset", -30, 30, 1, "%d px", a, -8)
 

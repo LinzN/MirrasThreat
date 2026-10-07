@@ -11,9 +11,10 @@ ns.title = "Mirra's Threat"
 ns.defaults = {
     mode     = "tank",    -- "tank" or "dps" (DPS / healer)
     style    = "bartext", -- "bartext", "bar" or "text"
-    width    = 80,
-    height   = 10,
-    fontSize = 10,
+    width    = 90,
+    height   = 12,
+    fontSize = 9,
+    textAlign = "LEFT",   -- text position inside the bar: "LEFT", "CENTER", "RIGHT"
     offsetY  = 0,
     warnAt   = 80,        -- threshold (in %) for the warning color
     hideZero = true,      -- hide the display while threat is 0 %
@@ -28,7 +29,8 @@ ns.colors = {
 
 ns.lastError = nil
 
-local BAR_TEXTURE = "Interface\\TargetingFrame\\UI-StatusBar"
+local MEDIA       = "Interface\\AddOns\\" .. addonName .. "\\media\\"
+local BAR_TEXTURE = MEDIA .. "bar"
 local FLAT        = "Interface\\Buttons\\WHITE8X8"
 
 ---------------------------------------------------------------------------
@@ -132,21 +134,12 @@ function ns.CreateWidget(parent)
     w:SetFrameStrata(parent:GetFrameStrata())
     w:SetFrameLevel(parent:GetFrameLevel() + 10)
 
-    -- 1 px dark border + inner background
-    w.border = w:CreateTexture(nil, "BACKGROUND", nil, -2)
-    w.border:SetTexture(FLAT)
-    w.border:SetVertexColor(0, 0, 0, 0.9)
-    w.border:SetAllPoints()
-
-    w.bg = w:CreateTexture(nil, "BACKGROUND", nil, -1)
+    -- dark trough behind the fill (its corners are covered by the frame)
+    w.bg = w:CreateTexture(nil, "BACKGROUND")
     w.bg:SetTexture(FLAT)
-    w.bg:SetVertexColor(0.07, 0.07, 0.09, 0.85)
-    w.bg:SetPoint("TOPLEFT", 1, -1)
-    w.bg:SetPoint("BOTTOMRIGHT", -1, 1)
+    w.bg:SetVertexColor(0.03, 0.03, 0.04, 0.85)
 
     w.bar = CreateFrame("StatusBar", nil, w)
-    w.bar:SetPoint("TOPLEFT", 1, -1)
-    w.bar:SetPoint("BOTTOMRIGHT", -1, 1)
     w.bar:SetStatusBarTexture(BAR_TEXTURE)
     w.bar:SetMinMaxValues(0, 100)
     w.bar:SetValue(0)
@@ -154,25 +147,32 @@ function ns.CreateWidget(parent)
     w.warnBar = CreateZoneBar(w, 1)
     w.highBar = CreateZoneBar(w, 2)
 
+    -- everything drawn above the fill: frame, threshold marker, text
     w.overlay = CreateFrame("Frame", nil, w)
     w.overlay:SetAllPoints()
     w.overlay:SetFrameLevel(w.bar:GetFrameLevel() + 5)
 
-    -- subtle top highlight for a bit of depth
-    w.shine = w.overlay:CreateTexture(nil, "ARTWORK", nil, 1)
-    w.shine:SetTexture(FLAT)
-    w.shine:SetVertexColor(1, 1, 1, 0.10)
-    w.shine:SetPoint("TOPLEFT", w.bar, "TOPLEFT")
-    w.shine:SetPoint("TOPRIGHT", w.bar, "TOPRIGHT")
-
     -- marker at the warning threshold
-    w.tick = w.overlay:CreateTexture(nil, "ARTWORK", nil, 2)
+    w.tick = w.overlay:CreateTexture(nil, "BACKGROUND")
     w.tick:SetTexture(FLAT)
-    w.tick:SetVertexColor(1, 1, 1, 0.35)
+    w.tick:SetVertexColor(0, 0, 0, 0.3)
     w.tick:SetWidth(1)
 
+    -- rounded frame, 3-slice so the corners never stretch
+    w.frameL = w.overlay:CreateTexture(nil, "BORDER")
+    w.frameL:SetTexture(MEDIA .. "frame_left")
+    w.frameR = w.overlay:CreateTexture(nil, "BORDER")
+    w.frameR:SetTexture(MEDIA .. "frame_right")
+    w.frameM = w.overlay:CreateTexture(nil, "BORDER")
+    w.frameM:SetTexture(MEDIA .. "frame_mid")
+    w.frameL:SetPoint("TOPLEFT")
+    w.frameL:SetPoint("BOTTOMLEFT")
+    w.frameR:SetPoint("TOPRIGHT")
+    w.frameR:SetPoint("BOTTOMRIGHT")
+    w.frameM:SetPoint("TOPLEFT", w.frameL, "TOPRIGHT")
+    w.frameM:SetPoint("BOTTOMRIGHT", w.frameR, "BOTTOMLEFT")
+
     w.text = w.overlay:CreateFontString(nil, "OVERLAY")
-    w.text:SetShadowOffset(1, -1)
     w.text:SetShadowColor(0, 0, 0, 1)
 
     ns.LayoutWidget(w)
@@ -192,10 +192,6 @@ function ns.LayoutWidget(w)
     local showBar  = db.style ~= "text"
     local showText = db.style ~= "bar"
 
-    w.text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
-    w.text:ClearAllPoints()
-    w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
-
     -- fixed colors per zone, only change when the settings change
     local low, mid, high = ZoneColors()
     w.bar:SetStatusBarColor(low[1], low[2], low[3], 1)
@@ -204,29 +200,58 @@ function ns.LayoutWidget(w)
     w.warnBar:SetMinMaxValues(db.warnAt - 1, db.warnAt)
     w.highBar:SetMinMaxValues(99, 100)
 
+    w.text:ClearAllPoints()
+
     if showBar then
-        w:SetSize(db.width, db.height)
-        w.border:Show()
+        local h = db.height
+        local inset = h * 4 / 32          -- matches the frame texture's border
+        w:SetSize(db.width, h)
+
+        w.frameL:SetWidth(h / 2)
+        w.frameR:SetWidth(h / 2)
+        for _, t in ipairs({ w.frameL, w.frameM, w.frameR }) do t:Show() end
+
+        w.bg:ClearAllPoints()
+        w.bg:SetPoint("TOPLEFT", inset, -inset)
+        w.bg:SetPoint("BOTTOMRIGHT", -inset, inset)
         w.bg:Show()
+
+        w.bar:ClearAllPoints()
+        w.bar:SetPoint("TOPLEFT", inset, -inset)
+        w.bar:SetPoint("BOTTOMRIGHT", -inset, inset)
         w.bar:Show()
         w.warnBar:Show()
         w.highBar:Show()
-        w.shine:SetHeight(math.max(1, math.floor(db.height / 3)))
-        w.shine:Show()
-        local x = math.floor((db.width - 2) * db.warnAt / 100)
+
+        local x = (db.width - 2 * inset) * db.warnAt / 100
         w.tick:ClearAllPoints()
         w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
         w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
         w.tick:Show()
+
+        -- resource bar look: light text with a soft shadow, inside the bar
+        w.text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "")
+        w.text:SetShadowOffset(1, -1)
+        w.text:SetTextColor(0.96, 0.96, 0.96, 1)
+        local pad = math.max(3, h * 0.3)
+        if db.textAlign == "CENTER" then
+            w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
+        elseif db.textAlign == "RIGHT" then
+            w.text:SetPoint("RIGHT", w, "RIGHT", -pad, 0)
+        else
+            w.text:SetPoint("LEFT", w, "LEFT", pad, 0)
+        end
     else
         w:SetSize(db.width, db.fontSize + 4)
-        w.border:Hide()
-        w.bg:Hide()
+        for _, t in ipairs({ w.frameL, w.frameM, w.frameR, w.bg, w.tick }) do t:Hide() end
         w.bar:Hide()
         w.warnBar:Hide()
         w.highBar:Hide()
-        w.shine:Hide()
-        w.tick:Hide()
+
+        -- text only: colored by threat, outlined for readability
+        w.text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
+        w.text:SetShadowOffset(1, -1)
+        w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
     end
 
     if showText then w.text:Show() else w.text:Hide() end
@@ -283,7 +308,9 @@ function ns.RenderWidget(w, pct, isTanking)
             NoteError("Secret value", err)
             return false
         end
-        ns.textColorMethod = ColorSecretText(w, pct, isTanking)
+        if (ns.db or ns.defaults).style == "text" then
+            ns.textColorMethod = ColorSecretText(w, pct, isTanking)
+        end
         return true
     end
 
@@ -294,7 +321,9 @@ function ns.RenderWidget(w, pct, isTanking)
 
     local c = ns.GetColor(display)
     w.text:SetText(display .. "%")
-    w.text:SetTextColor(c[1], c[2], c[3], 1)
+    if (ns.db or ns.defaults).style == "text" then
+        w.text:SetTextColor(c[1], c[2], c[3], 1)
+    end
     SetBarValues(w, math.min(display, 100))
     return true
 end

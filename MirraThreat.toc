@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: Mirra's Threat
+## Notes: Shows your threat on enemy nameplates as a compact bar and percentage.
+## Author: Kekshaus
+## Version: 1.0.0
+## IconTexture: Interface\AddOns\MirraThreat\media\icon
+## Category: Combat
+## SavedVariablesPerCharacter: MirraThreatDB
+
+Core.lua
+Options.lua

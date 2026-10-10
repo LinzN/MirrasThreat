@@ -426,12 +426,44 @@ end
 
 local events = CreateFrame("Frame")
 
+-- Only real nameplate tokens ("nameplate1" ...) may be passed to
+-- C_NamePlate.GetNamePlateForUnit. Threat events also fire for tokens like
+-- "target", "targettarget" or "party1target", which the client rejects.
+local function IsNameplateToken(unit)
+    return type(unit) == "string"
+        and not IsSecret(unit)
+        and unit:match("^nameplate%d+$") ~= nil
+end
+
+local function GetPlate(unit)
+    if not IsNameplateToken(unit) then return nil end
+    local ok, plate = pcall(C_NamePlate.GetNamePlateForUnit, unit)
+    if ok then return plate end
+    return nil
+end
+
 local function SafeUpdateUnit(unit)
-    local plate = unit and C_NamePlate.GetNamePlateForUnit(unit)
+    local plate = GetPlate(unit)
     if plate then
         local ok, err = pcall(UpdatePlate, plate, unit)
         if not ok then NoteError("Update", err) end
     end
+end
+
+-- Many events can arrive in the same frame (especially in groups);
+-- refresh all nameplates at most once per frame.
+local updateQueued = false
+local function QueueUpdateAll()
+    if updateQueued then return end
+    if not (C_Timer and C_Timer.After) then
+        ns.UpdateAll()
+        return
+    end
+    updateQueued = true
+    C_Timer.After(0, function()
+        updateQueued = false
+        ns.UpdateAll()
+    end)
 end
 
 events:SetScript("OnEvent", function(self, event, arg1)
@@ -453,11 +485,16 @@ events:SetScript("OnEvent", function(self, event, arg1)
     if event == "NAME_PLATE_UNIT_ADDED" then
         SafeUpdateUnit(arg1)
     elseif event == "NAME_PLATE_UNIT_REMOVED" then
-        HidePlate(C_NamePlate.GetNamePlateForUnit(arg1))
-    elseif event == "UNIT_THREAT_LIST_UPDATE" and arg1 and arg1 ~= "player" then
-        SafeUpdateUnit(arg1)
+        HidePlate(GetPlate(arg1))
+    elseif event == "UNIT_THREAT_LIST_UPDATE" then
+        if IsNameplateToken(arg1) then
+            SafeUpdateUnit(arg1)
+        else
+            -- "target", "targettarget", "party1target" ...: refresh all plates instead
+            QueueUpdateAll()
+        end
     else
-        ns.UpdateAll()
+        QueueUpdateAll()
     end
 end)
 

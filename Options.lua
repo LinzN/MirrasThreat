@@ -290,6 +290,7 @@ end
 
 local function BuildPanel()
     panel = CreateFrame("Frame", "MirraThreatOptionsPanel")
+    panel:Hide()
     panel.name = ns.title
 
     local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")

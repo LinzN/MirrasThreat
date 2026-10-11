@@ -344,6 +344,59 @@ local function GetPlateAnchor(plate)
         or uf
 end
 
+local function GetCastBar(plate)
+    local uf = plate.UnitFrame
+    return uf and (uf.castBar or uf.CastBar or uf.castbar) or nil
+end
+
+-- True when the cast bar is visible and sits below the health bar,
+-- i.e. it would cover the threat display.
+local function CastBarInTheWay(castBar, healthAnchor)
+    if not castBar or not castBar:IsShown() then return false end
+    local ok, below = pcall(function()
+        local cb, hb = castBar:GetBottom(), healthAnchor:GetBottom()
+        return cb == nil or hb == nil or cb < hb
+    end)
+    return (not ok) or below
+end
+
+-- Places the widget under the health bar, or under the cast bar while
+-- the enemy is casting.
+local function AnchorWidget(w, plate)
+    local anchor = GetPlateAnchor(plate)
+    local castBar = GetCastBar(plate)
+    if CastBarInTheWay(castBar, anchor) then
+        anchor = castBar
+    end
+    if w.anchor ~= anchor or w.anchorOffset ~= ns.db.offsetY then
+        w:ClearAllPoints()
+        w:SetPoint("TOP", anchor, "BOTTOM", 0, -2 + ns.db.offsetY)
+        w.anchor, w.anchorOffset = anchor, ns.db.offsetY
+    end
+end
+
+-- Follow the cast bar as it appears and disappears. Each nameplate (and its
+-- cast bar) is recycled by the client, so every cast bar is hooked only once.
+local hookedCastBars = {}
+
+local function HookCastBar(plate)
+    local castBar = GetCastBar(plate)
+    if not castBar or hookedCastBars[castBar] then return end
+    hookedCastBars[castBar] = true
+    local function Reanchor()
+        local w = widgets[plate]
+        if w and ns.db then
+            local ok, err = pcall(AnchorWidget, w, plate)
+            if not ok then NoteError("Cast bar", err) end
+        end
+    end
+    local ok, err = pcall(function()
+        castBar:HookScript("OnShow", Reanchor)
+        castBar:HookScript("OnHide", Reanchor)
+    end)
+    if not ok then NoteError("Cast bar hook", err) end
+end
+
 local function HidePlate(plate)
     local w = plate and widgets[plate]
     if w then w:Hide() end
@@ -386,12 +439,8 @@ local function UpdatePlate(plate, unit)
         widgets[plate] = w
     end
 
-    local anchor = GetPlateAnchor(plate)
-    if w.anchor ~= anchor or w.anchorOffset ~= ns.db.offsetY then
-        w:ClearAllPoints()
-        w:SetPoint("TOP", anchor, "BOTTOM", 0, -2 + ns.db.offsetY)
-        w.anchor, w.anchorOffset = anchor, ns.db.offsetY
-    end
+    HookCastBar(plate)
+    AnchorWidget(w, plate)
 
     if ns.RenderWidget(w, percent, isTanking) then
         w:Show()

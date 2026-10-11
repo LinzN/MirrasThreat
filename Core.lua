@@ -344,15 +344,38 @@ local function GetPlateAnchor(plate)
         or uf
 end
 
+local CAST_BAR_KEYS = { "castBar", "CastBar", "castbar", "CastingBar", "castingBar" }
+local CAST_FALLBACK_OFFSET = 14   -- used when no cast bar frame can be found
+
 local function GetCastBar(plate)
     local uf = plate.UnitFrame
-    return uf and (uf.castBar or uf.CastBar or uf.castbar) or nil
+    if not uf then return nil, nil end
+    for _, key in ipairs(CAST_BAR_KEYS) do
+        local cb = uf[key]
+        if type(cb) == "table" and cb.GetObjectType then
+            return cb, key
+        end
+    end
+    return nil, nil
 end
+ns.GetCastBar = GetCastBar
 
--- True when the cast bar is visible and sits below the health bar,
--- i.e. it would cover the threat display.
-local function CastBarInTheWay(castBar, healthAnchor)
-    if not castBar or not castBar:IsShown() then return false end
+-- Is the unit casting or channeling? Works with secret return values:
+-- a secret value is never nil, so it counts as "casting".
+local function IsCasting(unit)
+    if not unit then return false end
+    local ok, casting = pcall(function()
+        local name = UnitCastingInfo and UnitCastingInfo(unit)
+        if IsSecret(name) or name ~= nil then return true end
+        local cname = UnitChannelInfo and UnitChannelInfo(unit)
+        return IsSecret(cname) or cname ~= nil
+    end)
+    return ok and casting
+end
+ns.IsCasting = IsCasting
+
+-- True when the cast bar sits below the health bar (so it would cover us).
+local function CastBarIsBelow(castBar, healthAnchor)
     local ok, below = pcall(function()
         local cb, hb = castBar:GetBottom(), healthAnchor:GetBottom()
         return cb == nil or hb == nil or cb < hb
@@ -361,38 +384,60 @@ local function CastBarInTheWay(castBar, healthAnchor)
 end
 
 -- Places the widget under the health bar, or under the cast bar while
--- the enemy is casting.
-local function AnchorWidget(w, plate)
+-- the enemy is casting. Casting is detected from the unit (events + API)
+-- and from the cast bar frame itself, whichever reports it.
+local function AnchorWidget(w, plate, castingOverride)
     local anchor = GetPlateAnchor(plate)
     local castBar = GetCastBar(plate)
-    if CastBarInTheWay(castBar, anchor) then
-        anchor = castBar
+
+    local casting = castingOverride
+    if casting == nil then
+        casting = IsCasting(w.unit)
     end
-    if w.anchor ~= anchor or w.anchorOffset ~= ns.db.offsetY then
+    if not casting and castBar and w.castBarShown then
+        -- still fading out after the cast? (some clients only fade the alpha)
+        local ok, visible = pcall(function()
+            return castBar:IsShown() and (castBar:GetAlpha() or 1) > 0.05
+        end)
+        casting = ok and visible or false
+    end
+
+    local extra = 0
+    if casting then
+        if castBar and CastBarIsBelow(castBar, anchor) then
+            anchor = castBar
+        elseif not castBar then
+            extra = CAST_FALLBACK_OFFSET
+        end
+    end
+
+    local y = -2 + ns.db.offsetY - extra
+    if w.anchor ~= anchor or w.anchorY ~= y then
         w:ClearAllPoints()
-        w:SetPoint("TOP", anchor, "BOTTOM", 0, -2 + ns.db.offsetY)
-        w.anchor, w.anchorOffset = anchor, ns.db.offsetY
+        w:SetPoint("TOP", anchor, "BOTTOM", 0, y)
+        w.anchor, w.anchorY = anchor, y
     end
 end
 
--- Follow the cast bar as it appears and disappears. Each nameplate (and its
--- cast bar) is recycled by the client, so every cast bar is hooked only once.
 local hookedCastBars = {}
 
+-- Also follow the cast bar frame directly (covers its fade-out). Nameplates
+-- and their cast bars are recycled by the client, so hook each one once.
 local function HookCastBar(plate)
     local castBar = GetCastBar(plate)
     if not castBar or hookedCastBars[castBar] then return end
     hookedCastBars[castBar] = true
-    local function Reanchor()
+    local function OnVisibility(shown)
         local w = widgets[plate]
         if w and ns.db then
+            w.castBarShown = shown
             local ok, err = pcall(AnchorWidget, w, plate)
             if not ok then NoteError("Cast bar", err) end
         end
     end
     local ok, err = pcall(function()
-        castBar:HookScript("OnShow", Reanchor)
-        castBar:HookScript("OnHide", Reanchor)
+        castBar:HookScript("OnShow", function() OnVisibility(true) end)
+        castBar:HookScript("OnHide", function() OnVisibility(false) end)
     end)
     if not ok then NoteError("Cast bar hook", err) end
 end
@@ -439,6 +484,10 @@ local function UpdatePlate(plate, unit)
         widgets[plate] = w
     end
 
+    if w.unit ~= unit then
+        w.unit = unit
+        w.castBarShown = nil
+    end
     HookCastBar(plate)
     AnchorWidget(w, plate)
 
@@ -462,7 +511,7 @@ function ns.ApplySettings()
     ns.layoutStamp = ns.layoutStamp + 1
     ns.RebuildCurve()
     for plate, w in pairs(widgets) do
-        w.anchor = nil
+        w.anchor, w.anchorY = nil, nil
         ns.LayoutWidget(w)
     end
     ns.UpdateAll()
@@ -474,6 +523,7 @@ end
 ---------------------------------------------------------------------------
 
 local events = CreateFrame("Frame")
+local CAST_EVENTS
 
 -- Only real nameplate tokens ("nameplate1" ...) may be passed to
 -- C_NamePlate.GetNamePlateForUnit. Threat events also fire for tokens like
@@ -535,6 +585,16 @@ events:SetScript("OnEvent", function(self, event, arg1)
         SafeUpdateUnit(arg1)
     elseif event == "NAME_PLATE_UNIT_REMOVED" then
         HidePlate(GetPlate(arg1))
+    elseif CAST_EVENTS[event] ~= nil then
+        -- enemy started/stopped casting: move the display below/back up
+        local plate = GetPlate(arg1)
+        local w = plate and widgets[plate]
+        if w then
+            w.unit = arg1
+            local override = CAST_EVENTS[event] or nil   -- true on start, API check otherwise
+            local ok, err = pcall(AnchorWidget, w, plate, override)
+            if not ok then NoteError("Cast event", err) end
+        end
     elseif event == "UNIT_THREAT_LIST_UPDATE" then
         if IsNameplateToken(arg1) then
             SafeUpdateUnit(arg1)
@@ -546,6 +606,21 @@ events:SetScript("OnEvent", function(self, event, arg1)
         QueueUpdateAll()
     end
 end)
+
+-- true = cast started, false = cast ended (state is then re-read from the API)
+CAST_EVENTS = {
+    UNIT_SPELLCAST_START          = true,
+    UNIT_SPELLCAST_CHANNEL_START  = true,
+    UNIT_SPELLCAST_EMPOWER_START  = true,
+    UNIT_SPELLCAST_STOP           = false,
+    UNIT_SPELLCAST_CHANNEL_STOP   = false,
+    UNIT_SPELLCAST_EMPOWER_STOP   = false,
+    UNIT_SPELLCAST_INTERRUPTED    = false,
+    UNIT_SPELLCAST_FAILED         = false,
+}
+for event in pairs(CAST_EVENTS) do
+    pcall(events.RegisterEvent, events, event)   -- not every client knows every event
+end
 
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -585,6 +660,15 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         print("  Secret values: " .. tostring(issecretvalue ~= nil))
         print("  Color curve: " .. tostring(colorCurve ~= nil))
         print("  Text color method: " .. tostring(ns.textColorMethod or "-"))
+        local okp, tplate = pcall(C_NamePlate.GetNamePlateForUnit, "target")
+        if okp and tplate then
+            local cb, key = GetCastBar(tplate)
+            print("  Target cast bar: " .. tostring(key or "not found")
+                .. (cb and (", shown: " .. tostring(cb:IsShown())) or ""))
+            print("  Target casting: " .. tostring(IsCasting("target")))
+        else
+            print("  Target cast bar: no target nameplate")
+        end
         print("  Last error: " .. tostring(ns.lastError))
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end

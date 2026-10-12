@@ -216,6 +216,7 @@ function ns.CreateWidget(parent)
     w.frameM:SetPoint("BOTTOMRIGHT", w.frameR, "BOTTOMLEFT")
 
     w.dividers = {}   -- segment dividers, created on demand
+    w.altGates = {}   -- all gates of the non-bar styles, created on demand
 
     w.text = w.overlay:CreateFontString(nil, "OVERLAY")
     w.text:SetShadowColor(0, 0, 0, 1)
@@ -232,6 +233,185 @@ local function ZoneColors()
     return c.bad, c.warn, c.good
 end
 
+---------------------------------------------------------------------------
+-- Non-bar styles: Badge, Pips, Glow
+--
+-- They use the same trick as the bar: every colored element is a StatusBar
+-- "gate" with a tiny value range, so it is either completely empty or
+-- completely full depending on the threat value. Each element is drawn as
+-- three stacked gates (low / warning / high zone color); the highest one that
+-- is full wins. Only SetValue() ever sees the (possibly secret) threat value.
+---------------------------------------------------------------------------
+
+local ALT_STYLES = { badge = true, pips = true, glow = true }
+function ns.IsAltStyle(style) return ALT_STYLES[style] == true end
+
+local GLOW_SIZE = 5
+
+local function NewGate(w, texture, level)
+    local b = CreateFrame("StatusBar", nil, w)
+    b:SetFrameLevel(w:GetFrameLevel() + level)
+    b:SetStatusBarTexture(texture)
+    b:SetMinMaxValues(-1, 0)
+    b:SetValue(0)
+    b:Hide()
+    w.altGates[#w.altGates + 1] = b
+    return b
+end
+
+local function NewGateSet(w, texture, level)
+    return {
+        NewGate(w, texture, level),       -- low zone color
+        NewGate(w, texture, level + 1),   -- warning color
+        NewGate(w, texture, level + 2),   -- high color
+    }
+end
+
+-- lightFrom: threat (in %) at which this element lights up at all (nil = always)
+local function ConfigureGateSet(set, lightFrom, colors, warnAt)
+    if lightFrom then
+        set[1]:SetMinMaxValues(lightFrom - 0.5, lightFrom)
+    else
+        set[1]:SetMinMaxValues(-1, 0)
+    end
+    local warnFrom = math.max(lightFrom or 0, warnAt)
+    set[2]:SetMinMaxValues(warnFrom - 1, warnFrom)
+    set[3]:SetMinMaxValues(99, 100)
+    for i = 1, 3 do
+        local c = colors[i]
+        set[i]:SetStatusBarColor(c[1], c[2], c[3], c[4] or 1)
+    end
+end
+
+local function PlaceGateSet(set, region, inset)
+    for i = 1, 3 do
+        set[i]:ClearAllPoints()
+        set[i]:SetPoint("TOPLEFT", region, "TOPLEFT", inset, -inset)
+        set[i]:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -inset, inset)
+        set[i]:Show()
+    end
+end
+
+local function HideAlt(w)
+    for _, b in ipairs(w.altGates) do b:Hide() end
+    if w.badgeRing then w.badgeRing:Hide() end
+    if w.pips then
+        for _, pip in ipairs(w.pips) do pip.slot:Hide() end
+    end
+end
+
+local function EnsureAlt(w, style)
+    if style == "badge" and not w.badge then
+        w.badge = NewGateSet(w, MEDIA .. "badge_fill", 1)
+        w.badgeRing = w.overlay:CreateTexture(nil, "BORDER")
+        w.badgeRing:SetTexture(MEDIA .. "badge_ring")
+        w.badgeRing:SetAllPoints(w)
+    elseif style == "pips" and not w.pips then
+        w.pips = {}
+        for i = 1, 3 do
+            local slot = w:CreateTexture(nil, "BACKGROUND")
+            slot:SetTexture(FLAT)
+            slot:SetVertexColor(0.04, 0.04, 0.05, 0.85)
+            w.pips[i] = { slot = slot, set = NewGateSet(w, MEDIA .. "flat", 1) }
+        end
+    elseif style == "glow" and not w.glow then
+        w.glow = {}
+        for _, edge in ipairs({ "top", "bottom", "left", "right" }) do
+            w.glow[edge] = NewGateSet(w, MEDIA .. "glow_" .. edge, 1)
+        end
+    end
+end
+
+local function HideBarParts(w)
+    for _, t in ipairs({ w.frameL, w.frameM, w.frameR, w.bg, w.tick, w.border, w.bgL, w.bgM, w.bgR }) do
+        t:Hide()
+    end
+    for _, d in ipairs(w.dividers) do d:Hide() end
+    w.bar:Hide()
+    w.warnBar:Hide()
+    w.highBar:Hide()
+end
+
+local function LayoutAlt(w, style, db)
+    HideBarParts(w)
+    HideAlt(w)
+    EnsureAlt(w, style)
+
+    local low, mid, high = ZoneColors()
+    local colors = { low, mid, high }
+
+    if style == "badge" then
+        local size = math.floor(db.fontSize * 2.6 + 0.5)
+        w:SetSize(size, size)
+        ConfigureGateSet(w.badge, nil, colors, db.warnAt)
+        for i = 1, 3 do
+            w.badge[i]:ClearAllPoints()
+            w.badge[i]:SetAllPoints(w)
+            w.badge[i]:Show()
+        end
+        w.badgeRing:Show()
+
+        -- slightly smaller text so "100%" fits inside the circle
+        w.text:SetFont(STANDARD_TEXT_FONT, math.max(7, math.floor(db.fontSize * 0.85 + 0.5)), "OUTLINE")
+        w.text:SetShadowOffset(1, -1)
+        w.text:SetTextColor(1, 1, 1, 1)
+        w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
+        w.text:Show()
+
+    elseif style == "pips" then
+        -- three rising "signal" pips: 1 = some threat, 2 = warning, 3 = high
+        local h = db.height
+        local pw = math.max(4, math.floor(h * 0.55 + 0.5))
+        local gap = math.max(2, math.floor(h * 0.2 + 0.5))
+        local heights = { h * 0.5, h * 0.75, h }
+        local lightFrom = { 0.5, db.warnAt, 100 }
+        w:SetSize(3 * pw + 2 * gap, h)
+        for i, pip in ipairs(w.pips) do
+            pip.slot:ClearAllPoints()
+            pip.slot:SetPoint("BOTTOMLEFT", w, "BOTTOMLEFT", (i - 1) * (pw + gap), 0)
+            pip.slot:SetSize(pw, heights[i])
+            pip.slot:Show()
+            ConfigureGateSet(pip.set, lightFrom[i], colors, db.warnAt)
+            PlaceGateSet(pip.set, pip.slot, 1)
+        end
+        w.text:Hide()
+
+    elseif style == "glow" then
+        -- glow around the health bar; the widget is anchored around it
+        local glowColors = {}
+        for i, c in ipairs(colors) do glowColors[i] = { c[1], c[2], c[3], 0.9 } end
+        local g = w.glow
+        ConfigureGateSet(g.top, nil, glowColors, db.warnAt)
+        ConfigureGateSet(g.bottom, nil, glowColors, db.warnAt)
+        ConfigureGateSet(g.left, nil, glowColors, db.warnAt)
+        ConfigureGateSet(g.right, nil, glowColors, db.warnAt)
+        for i = 1, 3 do
+            local t, b, l, r = g.top[i], g.bottom[i], g.left[i], g.right[i]
+            for _, x in ipairs({ t, b, l, r }) do x:ClearAllPoints(); x:Show() end
+            t:SetPoint("TOPLEFT", w, "TOPLEFT")
+            t:SetPoint("TOPRIGHT", w, "TOPRIGHT")
+            t:SetHeight(GLOW_SIZE)
+            b:SetPoint("BOTTOMLEFT", w, "BOTTOMLEFT")
+            b:SetPoint("BOTTOMRIGHT", w, "BOTTOMRIGHT")
+            b:SetHeight(GLOW_SIZE)
+            l:SetPoint("TOPLEFT", w, "TOPLEFT", 0, -GLOW_SIZE)
+            l:SetPoint("BOTTOMLEFT", w, "BOTTOMLEFT", 0, GLOW_SIZE)
+            l:SetWidth(GLOW_SIZE)
+            r:SetPoint("TOPRIGHT", w, "TOPRIGHT", 0, -GLOW_SIZE)
+            r:SetPoint("BOTTOMRIGHT", w, "BOTTOMRIGHT", 0, GLOW_SIZE)
+            r:SetWidth(GLOW_SIZE)
+        end
+        w.text:Hide()
+    end
+end
+
+-- Positions a glow widget around the given health bar region.
+function ns.PlaceGlow(w, healthRegion)
+    w:ClearAllPoints()
+    w:SetPoint("TOPLEFT", healthRegion, "TOPLEFT", -GLOW_SIZE, GLOW_SIZE)
+    w:SetPoint("BOTTOMRIGHT", healthRegion, "BOTTOMRIGHT", GLOW_SIZE, -GLOW_SIZE)
+end
+
 function ns.LayoutWidget(w)
     local db = ns.db or ns.defaults
     local showBar  = db.style ~= "text"
@@ -246,6 +426,13 @@ function ns.LayoutWidget(w)
     w.highBar:SetMinMaxValues(99, 100)
 
     w.text:ClearAllPoints()
+
+    if ALT_STYLES[db.style] then
+        LayoutAlt(w, db.style, db)
+        w.layoutStamp = ns.layoutStamp
+        return
+    end
+    HideAlt(w)
 
     local theme = ns.GetTheme()
 
@@ -385,6 +572,7 @@ local function SetBarValues(w, pct)
     w.bar:SetValue(pct)
     w.warnBar:SetValue(pct)
     w.highBar:SetValue(pct)
+    for _, b in ipairs(w.altGates) do b:SetValue(pct) end
 end
 
 -- Text color for secret values: color curve first, then the tanking flag.
@@ -511,6 +699,16 @@ end
 -- and from the cast bar frame itself, whichever reports it.
 local function AnchorWidget(w, plate, castingOverride)
     local anchor = GetPlateAnchor(plate)
+
+    if ns.db.style == "glow" then
+        -- glow surrounds the health bar; cast bars don't matter here
+        if w.anchor ~= anchor or w.anchorY ~= "glow" then
+            ns.PlaceGlow(w, anchor)
+            w.anchor, w.anchorY = anchor, "glow"
+        end
+        return
+    end
+
     local castBar = GetCastBar(plate)
 
     local casting = castingOverride

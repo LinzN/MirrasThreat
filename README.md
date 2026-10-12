@@ -11,7 +11,7 @@ A lightweight WoW Forever addon that shows your threat on enemy nameplates as a 
   - **Tank:** green while you hold aggro, yellow when losing it, red once lost
   - **DPS / Healer:** green while safe, yellow when close to pulling, red once you pull aggro
 - Five bar designs: Resource, Capsule, Flat, Segments, Classic
-- Three styles: bar + text, bar only, text only
+- Six styles: bar + text, bar only, text only, badge (colored circle with %), pips (three signal pips) and glow (colored glow around the health bar)
 - Text position inside the bar: left, center or right
 - Adjustable width, bar height, font size, vertical offset and warning threshold
 - Optional: hide at 0 % threat, only show while in a group

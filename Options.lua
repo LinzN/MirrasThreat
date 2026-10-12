@@ -258,7 +258,11 @@ function ns.RefreshPreview()
         local w = p.threat
         ns.LayoutWidget(w)
         w:ClearAllPoints()
-        w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
+        if db.style == "glow" then
+            ns.PlaceGlow(w, p.hp)
+        else
+            w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
+        end
         ns.RenderWidget(w, values[i])
         w:Show()
         p.caption:ClearAllPoints()
@@ -328,12 +332,19 @@ local function BuildPanel()
         { text = "Bar",        value = "bar",     width = 96 },
         { text = "Text",       value = "text",    width = 96 },
     }, h, -8)
+    local style2 = Segmented(panel, "style", {
+        { text = "Badge", value = "badge", width = 96 },
+        { text = "Pips",  value = "pips",  width = 96 },
+        { text = "Glow",  value = "glow",  width = 96 },
+    }, style.first, -4)
+    style.onChange = function() style2:Refresh() end
+    style2.onChange = function() style:Refresh() end
 
     local align = Segmented(panel, "textAlign", {
         { text = "Text left",   value = "LEFT",   width = 96 },
         { text = "Text center", value = "CENTER", width = 96 },
         { text = "Text right",  value = "RIGHT",  width = 96 },
-    }, style.first, -6)
+    }, style2.first, -6)
 
     h = SectionHeader(panel, "Size & Position", align.first, -18)
     local a = Slider(panel, "width",    "Width",           40, 160, 2, "%d px", h, -10)

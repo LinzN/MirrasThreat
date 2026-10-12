@@ -36,7 +36,7 @@ local function Changed()
     ns.ApplySettings()
 end
 
-local function SectionHeader(parent, text, anchor, y)
+local function SectionHeader(parent, text, anchor, y, width)
     local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     fs:SetText(string.upper(text))
     fs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
@@ -47,7 +47,7 @@ local function SectionHeader(parent, text, anchor, y)
     line:SetVertexColor(GOLD[1], GOLD[2], GOLD[3], 0.25)
     line:SetHeight(1)
     line:SetPoint("LEFT", fs, "RIGHT", 8, 0)
-    line:SetWidth(300 - fs:GetStringWidth() - 8)
+    line:SetWidth((width or 300) - fs:GetStringWidth() - 8)
     return fs
 end
 
@@ -348,10 +348,36 @@ local function BuildPanel()
     a = Checkbox(panel, "hideSolo", "Only show in a group",
         "Hides threat while you are playing solo.", a, -2)
 
-    -- Right column: preview ---------------------------------------------
+    -- Right column: design + preview ------------------------------------
+    local rightTop = CreateFrame("Frame", nil, panel)
+    rightTop:SetSize(1, 1)
+    rightTop:SetPoint("TOPLEFT", panel, "TOPLEFT", 356, -42)
+
+    h = SectionHeader(panel, "Design", rightTop, -20, 250)
+    local designRows, row = {}, {}
+    for i, t in ipairs(ns.themes) do
+        row[#row + 1] = { text = t.label, value = t.key, width = 80 }
+        if #row == 3 or i == #ns.themes then
+            designRows[#designRows + 1] = row
+            row = {}
+        end
+    end
+    local designGroups = {}
+    local prevAnchor, prevY = h, -8
+    for _, r in ipairs(designRows) do
+        local g = Segmented(panel, "theme", r, prevAnchor, prevY)
+        designGroups[#designGroups + 1] = g
+        prevAnchor, prevY = g.first, -4
+    end
+    for _, g in ipairs(designGroups) do
+        g.onChange = function()
+            for _, other in ipairs(designGroups) do other:Refresh() end
+        end
+    end
+
     local box = CreateFrame("Frame", nil, panel)
-    box:SetPoint("TOPLEFT", panel, "TOPLEFT", 356, -62)
-    box:SetSize(250, 330)
+    box:SetPoint("TOPLEFT", prevAnchor, "BOTTOMLEFT", 0, -14)
+    box:SetSize(250, 300)
     AddBorder(box, 0, 0, 0, 1)
     AddFill(box, 0.05, 0.05, 0.07, 0.9)
 
@@ -360,9 +386,9 @@ local function BuildPanel()
     boxTitle:SetText("PREVIEW")
     boxTitle:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
-    previews[1] = CreateMockPlate(box, "Kobold Tunneler", 0, -40)
-    previews[2] = CreateMockPlate(box, "Defias Bandit",   0, -135)
-    previews[3] = CreateMockPlate(box, "Hogger",          0, -230)
+    previews[1] = CreateMockPlate(box, "Kobold Tunneler", 0, -36)
+    previews[2] = CreateMockPlate(box, "Defias Bandit",   0, -122)
+    previews[3] = CreateMockPlate(box, "Hogger",          0, -208)
 
     -- Footer ------------------------------------------------------------
     local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")

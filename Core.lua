@@ -11,6 +11,7 @@ ns.title = "Mirra's Threat"
 ns.defaults = {
     mode     = "tank",    -- "tank" or "dps" (DPS / healer)
     style    = "bartext", -- "bartext", "bar" or "text"
+    theme    = "resource", -- bar design, see ns.themes
     width    = 84,
     height   = 13,
     fontSize = 10,
@@ -32,6 +33,34 @@ ns.lastError = nil
 local MEDIA       = "Interface\\AddOns\\" .. addonName .. "\\media\\"
 local BAR_TEXTURE = MEDIA .. "bar"
 local FLAT        = "Interface\\Buttons\\WHITE8X8"
+
+-- Bar designs. Every design uses the same zone-bar mechanics (see below);
+-- only textures, frame and insets differ.
+--   frame   3-slice frame textures (<frame>_left/_mid/_right), drawn above the fill
+--   border  plain 1 px dark border instead of a frame
+--   insetX/insetY  fill inset as a fraction of the bar height (frame designs)
+--   segments       number of segments (dividers drawn above the fill)
+--   bgShape        3-slice background shape instead of a plain rectangle
+ns.themes = {
+    { key = "resource", label = "Resource", bar = MEDIA .. "bar",  frame = "frame",
+      insetX = 4 / 32, insetY = 4 / 32, bg = { 0.03, 0.03, 0.04, 0.85 } },
+    { key = "capsule",  label = "Capsule",  bar = MEDIA .. "bar",  frame = "capsule", bgShape = "capsule_bg",
+      insetX = 0.30,   insetY = 4 / 32, bg = { 0.03, 0.03, 0.04, 0.85 } },
+    { key = "flat",     label = "Flat",     bar = MEDIA .. "flat", border = true,
+      bg = { 0.06, 0.06, 0.07, 0.80 } },
+    { key = "segments", label = "Segments", bar = MEDIA .. "flat", border = true, segments = 10,
+      bg = { 0.06, 0.06, 0.07, 0.80 } },
+    { key = "classic",  label = "Classic",  bar = "Interface\\TargetingFrame\\UI-StatusBar", frame = "classic",
+      insetX = 4 / 32, insetY = 4 / 32, bg = { 0.02, 0.02, 0.02, 0.80 } },
+}
+
+function ns.GetTheme()
+    local key = (ns.db or ns.defaults).theme
+    for _, t in ipairs(ns.themes) do
+        if t.key == key then return t end
+    end
+    return ns.themes[1]
+end
 
 ---------------------------------------------------------------------------
 -- Secret value helpers
@@ -134,10 +163,27 @@ function ns.CreateWidget(parent)
     w:SetFrameStrata(parent:GetFrameStrata())
     w:SetFrameLevel(parent:GetFrameLevel() + 10)
 
+    -- plain 1 px border (flat designs)
+    w.border = w:CreateTexture(nil, "BACKGROUND", nil, -2)
+    w.border:SetTexture(FLAT)
+    w.border:SetVertexColor(0, 0, 0, 0.9)
+    w.border:SetAllPoints()
+
     -- dark trough behind the fill (its corners are covered by the frame)
-    w.bg = w:CreateTexture(nil, "BACKGROUND")
+    w.bg = w:CreateTexture(nil, "BACKGROUND", nil, -1)
     w.bg:SetTexture(FLAT)
     w.bg:SetVertexColor(0.03, 0.03, 0.04, 0.85)
+
+    -- shaped background (capsule), 3-slice like the frame
+    w.bgL = w:CreateTexture(nil, "BACKGROUND", nil, -1)
+    w.bgR = w:CreateTexture(nil, "BACKGROUND", nil, -1)
+    w.bgM = w:CreateTexture(nil, "BACKGROUND", nil, -1)
+    w.bgL:SetPoint("TOPLEFT")
+    w.bgL:SetPoint("BOTTOMLEFT")
+    w.bgR:SetPoint("TOPRIGHT")
+    w.bgR:SetPoint("BOTTOMRIGHT")
+    w.bgM:SetPoint("TOPLEFT", w.bgL, "TOPRIGHT")
+    w.bgM:SetPoint("BOTTOMRIGHT", w.bgR, "BOTTOMLEFT")
 
     w.bar = CreateFrame("StatusBar", nil, w)
     w.bar:SetStatusBarTexture(BAR_TEXTURE)
@@ -160,17 +206,16 @@ function ns.CreateWidget(parent)
 
     -- rounded frame, 3-slice so the corners never stretch
     w.frameL = w.overlay:CreateTexture(nil, "BORDER")
-    w.frameL:SetTexture(MEDIA .. "frame_left")
     w.frameR = w.overlay:CreateTexture(nil, "BORDER")
-    w.frameR:SetTexture(MEDIA .. "frame_right")
     w.frameM = w.overlay:CreateTexture(nil, "BORDER")
-    w.frameM:SetTexture(MEDIA .. "frame_mid")
     w.frameL:SetPoint("TOPLEFT")
     w.frameL:SetPoint("BOTTOMLEFT")
     w.frameR:SetPoint("TOPRIGHT")
     w.frameR:SetPoint("BOTTOMRIGHT")
     w.frameM:SetPoint("TOPLEFT", w.frameL, "TOPRIGHT")
     w.frameM:SetPoint("BOTTOMRIGHT", w.frameR, "BOTTOMLEFT")
+
+    w.dividers = {}   -- segment dividers, created on demand
 
     w.text = w.overlay:CreateFontString(nil, "OVERLAY")
     w.text:SetShadowColor(0, 0, 0, 1)
@@ -202,32 +247,110 @@ function ns.LayoutWidget(w)
 
     w.text:ClearAllPoints()
 
+    local theme = ns.GetTheme()
+
+    -- textures only change when the design changes
+    if w.themeKey ~= theme.key then
+        for _, b in ipairs({ w.bar, w.warnBar, w.highBar }) do
+            b:SetStatusBarTexture(theme.bar)
+        end
+        -- the zone bars follow the main fill texture; re-anchor in case
+        -- the client created a new texture object
+        local fill = w.bar:GetStatusBarTexture()
+        for _, b in ipairs({ w.warnBar, w.highBar }) do
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", fill, "TOPLEFT")
+            b:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+        end
+        if theme.frame then
+            w.frameL:SetTexture(MEDIA .. theme.frame .. "_left")
+            w.frameM:SetTexture(MEDIA .. theme.frame .. "_mid")
+            w.frameR:SetTexture(MEDIA .. theme.frame .. "_right")
+        end
+        w.bg:SetVertexColor(theme.bg[1], theme.bg[2], theme.bg[3], theme.bg[4])
+        if theme.bgShape then
+            w.bgL:SetTexture(MEDIA .. theme.bgShape .. "_left")
+            w.bgM:SetTexture(MEDIA .. theme.bgShape .. "_mid")
+            w.bgR:SetTexture(MEDIA .. theme.bgShape .. "_right")
+            for _, t in ipairs({ w.bgL, w.bgM, w.bgR }) do
+                t:SetVertexColor(theme.bg[1], theme.bg[2], theme.bg[3], theme.bg[4])
+            end
+        end
+        w.themeKey = theme.key
+        -- zone colors were reset with the texture
+        w.bar:SetStatusBarColor(low[1], low[2], low[3], 1)
+        w.warnBar:SetStatusBarColor(mid[1], mid[2], mid[3], 1)
+        w.highBar:SetStatusBarColor(high[1], high[2], high[3], 1)
+    end
+
+    for _, d in ipairs(w.dividers) do d:Hide() end
+
     if showBar then
         local h = db.height
-        local inset = h * 4 / 32          -- matches the frame texture's border
+        local insetX, insetY
+        if theme.frame then
+            insetX, insetY = h * theme.insetX, h * theme.insetY
+        else
+            insetX, insetY = 1, 1
+        end
         w:SetSize(db.width, h)
 
-        w.frameL:SetWidth(h / 2)
-        w.frameR:SetWidth(h / 2)
-        for _, t in ipairs({ w.frameL, w.frameM, w.frameR }) do t:Show() end
+        if theme.frame then
+            w.frameL:SetWidth(h / 2)
+            w.frameR:SetWidth(h / 2)
+            for _, t in ipairs({ w.frameL, w.frameM, w.frameR }) do t:Show() end
+        else
+            for _, t in ipairs({ w.frameL, w.frameM, w.frameR }) do t:Hide() end
+        end
+        if theme.border then w.border:Show() else w.border:Hide() end
 
-        w.bg:ClearAllPoints()
-        w.bg:SetPoint("TOPLEFT", inset, -inset)
-        w.bg:SetPoint("BOTTOMRIGHT", -inset, inset)
-        w.bg:Show()
+        if theme.bgShape then
+            w.bg:Hide()
+            w.bgL:SetWidth(h / 2)
+            w.bgR:SetWidth(h / 2)
+            for _, t in ipairs({ w.bgL, w.bgM, w.bgR }) do t:Show() end
+        else
+            for _, t in ipairs({ w.bgL, w.bgM, w.bgR }) do t:Hide() end
+            w.bg:ClearAllPoints()
+            w.bg:SetPoint("TOPLEFT", insetX, -insetY)
+            w.bg:SetPoint("BOTTOMRIGHT", -insetX, insetY)
+            w.bg:Show()
+        end
 
         w.bar:ClearAllPoints()
-        w.bar:SetPoint("TOPLEFT", inset, -inset)
-        w.bar:SetPoint("BOTTOMRIGHT", -inset, inset)
+        w.bar:SetPoint("TOPLEFT", insetX, -insetY)
+        w.bar:SetPoint("BOTTOMRIGHT", -insetX, insetY)
         w.bar:Show()
         w.warnBar:Show()
         w.highBar:Show()
 
-        local x = (db.width - 2 * inset) * db.warnAt / 100
-        w.tick:ClearAllPoints()
-        w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
-        w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
-        w.tick:Show()
+        local inner = db.width - 2 * insetX
+        if theme.segments then
+            -- dark gaps between the segments; the threshold marker is not needed
+            local gap = inner >= 100 and 2 or 1
+            for i = 1, theme.segments - 1 do
+                local d = w.dividers[i]
+                if not d then
+                    d = w.overlay:CreateTexture(nil, "BACKGROUND")
+                    d:SetTexture(FLAT)
+                    d:SetVertexColor(0.04, 0.04, 0.05, 0.95)
+                    w.dividers[i] = d
+                end
+                local x = inner * i / theme.segments - gap / 2
+                d:SetWidth(gap)
+                d:ClearAllPoints()
+                d:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
+                d:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
+                d:Show()
+            end
+            w.tick:Hide()
+        else
+            local x = inner * db.warnAt / 100
+            w.tick:ClearAllPoints()
+            w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
+            w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
+            w.tick:Show()
+        end
 
         -- resource bar look: light text with a soft shadow, inside the bar
         w.text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "")
@@ -243,7 +366,7 @@ function ns.LayoutWidget(w)
         end
     else
         w:SetSize(db.width, db.fontSize + 4)
-        for _, t in ipairs({ w.frameL, w.frameM, w.frameR, w.bg, w.tick }) do t:Hide() end
+        for _, t in ipairs({ w.frameL, w.frameM, w.frameR, w.bg, w.tick, w.border, w.bgL, w.bgM, w.bgR }) do t:Hide() end
         w.bar:Hide()
         w.warnBar:Hide()
         w.highBar:Hide()

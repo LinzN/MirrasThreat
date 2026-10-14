@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/logo.png" width="256" alt="Mirra's Threat"></p>
 
-# Mirra' s Threat
+# Mirra's Threat
 
 A lightweight WoW Forever addon that shows your threat on enemy nameplates as a compact bar and/or percentage, colored for your role.
 

@@ -353,11 +353,18 @@ end
 
 local groupUnits = {}
 
+-- Other group members and pets. The player's own raid slot is skipped by
+-- index, so neither UnitExists nor UnitIsUnit is needed (both can return
+-- secret values on WoW Forever). Missing units simply return no threat.
 local function CollectGroupUnits()
     wipe(groupUnits)
     if IsInRaid and IsInRaid() then
+        local myIndex = UnitInRaid and UnitInRaid("player")
+        if IsSecret(myIndex) then myIndex = nil end
         for i = 1, (GetNumGroupMembers and GetNumGroupMembers() or 0) do
-            groupUnits[#groupUnits + 1] = "raid" .. i
+            if i ~= myIndex then
+                groupUnits[#groupUnits + 1] = "raid" .. i
+            end
             groupUnits[#groupUnits + 1] = "raidpet" .. i
         end
     else
@@ -370,55 +377,68 @@ local function CollectGroupUnits()
     return groupUnits
 end
 
-local function AllKnown(...)
-    for i = 1, select("#", ...) do
-        if IsSecret((select(i, ...))) then return false end
-    end
-    return true
-end
-
--- Returns { tanking, amount, value, warn } or nil when it can't be computed.
+-- Returns { tanking, amount, value, warn } or nil when it can't be computed
+-- (the reason is kept in ns.leadReason for /mthreat debug).
 --   amount  lead in threat (positive) or threat missing to regain aggro (negative)
 --   value   0..100 for the bar: remaining cushion while tanking,
 --           progress towards regaining aggro otherwise
 function ns.ComputeLead(mob)
-    local isTanking, _, scaled, _, threat = UnitDetailedThreatSituation("player", mob)
-    if not AllKnown(isTanking, scaled, threat) or threat == nil or scaled == nil then
-        return nil
-    end
+    local ok, result = pcall(function()
+        local isTanking, _, scaled, _, threat = UnitDetailedThreatSituation("player", mob)
+        if IsSecret(scaled) or IsSecret(threat) then
+            ns.leadReason = "own threat values are secret"
+            return nil
+        end
+        if threat == nil or scaled == nil then
+            ns.leadReason = "not on the threat list"
+            return nil
+        end
+        -- isTanking may be secret on its own; scaled is 100 while tanking
+        if IsSecret(isTanking) then
+            isTanking = scaled >= 100
+        end
 
-    if not isTanking then
-        if scaled <= 0 then return nil end
-        local need = threat * 100 / scaled
-        return { tanking = false, amount = -(need - threat), value = scaled }
-    end
+        if not isTanking then
+            if scaled <= 0 then
+                ns.leadReason = "no threat yet"
+                return nil
+            end
+            local need = threat * 100 / scaled
+            ns.leadReason = nil
+            return { tanking = false, amount = -(need - threat), value = scaled }
+        end
 
-    local minMargin, maxScaled
-    for _, u in ipairs(CollectGroupUnits()) do
-        local exists = UnitExists(u)
-        if IsSecret(exists) then return nil end
-        if exists then
-            local isMe = UnitIsUnit(u, "player")
-            if IsSecret(isMe) then return nil end
-            if not isMe then
-                local _, _, sc, _, tv = UnitDetailedThreatSituation(u, mob)
-                if not AllKnown(sc, tv) then return nil end
-                if sc and tv and sc > 0 and tv > 0 then
-                    local margin = tv * 100 / sc - tv
-                    if not minMargin or margin < minMargin then minMargin = margin end
-                    if not maxScaled or sc > maxScaled then maxScaled = sc end
-                end
+        local minMargin, maxScaled, skipped = nil, nil, 0
+        for _, u in ipairs(CollectGroupUnits()) do
+            local _, _, sc, _, tv = UnitDetailedThreatSituation(u, mob)
+            if IsSecret(sc) or IsSecret(tv) then
+                skipped = skipped + 1
+            elseif sc and tv and sc > 0 and tv > 0 then
+                local margin = tv * 100 / sc - tv
+                if not minMargin or margin < minMargin then minMargin = margin end
+                if not maxScaled or sc > maxScaled then maxScaled = sc end
             end
         end
-    end
+        if skipped > 0 and not minMargin then
+            ns.leadReason = "group threat values are secret"
+            return nil
+        end
 
-    maxScaled = maxScaled or 0
-    return {
-        tanking = true,
-        amount  = minMargin or threat,   -- nobody else has threat: the whole lead
-        value   = math.max(0, 100 - maxScaled),
-        warn    = maxScaled >= (ns.db or ns.defaults).warnAt,
-    }
+        maxScaled = maxScaled or 0
+        ns.leadReason = nil
+        return {
+            tanking = true,
+            amount  = minMargin or threat,   -- nobody else has threat: the whole lead
+            value   = math.max(0, 100 - maxScaled),
+            warn    = maxScaled >= (ns.db or ns.defaults).warnAt,
+        }
+    end)
+    if not ok then
+        ns.leadReason = "error: " .. tostring(result)
+        NoteError("Lead", result)
+        return nil
+    end
+    return result
 end
 
 function ns.FormatThreat(v)
@@ -820,8 +840,11 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
             print("  Target cast bar: no target nameplate")
         end
         local _, _, tsc, _, tval = UnitDetailedThreatSituation("player", "target")
-        print("  Target threat: " .. (IsSecret(tval) and "secret (lead not available)"
-            or tostring(tval)) .. ", tank display: " .. tostring(ns.db.tankDisplay))
+        print("  Mode: " .. tostring(ns.db.mode) .. ", tank display: " .. tostring(ns.db.tankDisplay))
+        print("  Target threat: " .. (IsSecret(tval) and "secret" or tostring(tval))
+            .. ", scaled: " .. (IsSecret(tsc) and "secret" or tostring(tsc)))
+        if Known(UnitExists("target")) ~= false then ns.ComputeLead("target") end
+        print("  Threat lead: " .. (ns.leadReason and ("not available - " .. ns.leadReason) or "OK"))
         print("  Last error: " .. tostring(ns.lastError))
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end

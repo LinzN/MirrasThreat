@@ -254,15 +254,27 @@ function ns.RefreshPreview()
     local db = ns.db
     local warnValue = math.min(99, db.warnAt + math.floor((100 - db.warnAt) / 2))
     local values = { 35, warnValue, 100 }
+    -- tank: percent, isTanking, status, name of the player with aggro
+    local tankSamples = {
+        { 35,  false, 0, "Healbot" },
+        { 100, true,  2, nil },
+        { 100, true,  3, nil },
+    }
+    if not db.tankInsecure then tankSamples[2] = { warnValue, false, 0, "Stabby" } end
     for i, p in ipairs(previews) do
         local w = p.threat
         ns.LayoutWidget(w)
         w:ClearAllPoints()
         w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
-        ns.RenderWidget(w, values[i])
+        if db.mode == "tank" then
+            ns.RenderWidget(w, tankSamples[i][1], tankSamples[i][2], tankSamples[i][3], tankSamples[i][4])
+        else
+            ns.RenderWidget(w, values[i])
+        end
         w:Show()
         p.caption:ClearAllPoints()
-        p.caption:SetPoint("TOP", w, "BOTTOM", 0, -5)
+        local capY = (db.mode == "tank" and db.tankShowTarget) and -(db.fontSize + 6) or -5
+        p.caption:SetPoint("TOP", w, "BOTTOM", 0, capY)
     end
 
     if db.mode == "dps" then
@@ -271,7 +283,7 @@ function ns.RefreshPreview()
         previews[3].caption:SetText("You pulled aggro")
     else
         previews[1].caption:SetText("Lost aggro")
-        previews[2].caption:SetText("Losing aggro")
+        previews[2].caption:SetText(db.tankInsecure and "Aggro insecure" or "Losing aggro")
         previews[3].caption:SetText("Holding aggro")
     end
 end
@@ -322,7 +334,12 @@ local function BuildPanel()
     end
     role.onChange = controls.roleHint
 
-    h = SectionHeader(panel, "Style", roleHint, -18)
+    local tankOpts = Checkbox(panel, "tankInsecure", "Tank: warn when aggro is insecure",
+        "While you are tanking but someone else already has more threat than you, the bar turns orange and pulses.", roleHint, -6)
+    tankOpts = Checkbox(panel, "tankShowTarget", "Tank: show who has aggro",
+        "After you lose aggro, the name of the player the enemy is attacking appears below the bar.", tankOpts, -2)
+
+    h = SectionHeader(panel, "Style", tankOpts, -14)
     local style = Segmented(panel, "style", {
         { text = "Bar + Text", value = "bartext", width = 96 },
         { text = "Bar",        value = "bar",     width = 96 },

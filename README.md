@@ -9,6 +9,9 @@ A lightweight WoW Forever addon that shows your threat on enemy nameplates as a 
 - Threat bar and percentage below every enemy nameplate, styled like the resource bars: rounded frame, glossy fill
 - Role-aware colors
   - **Tank:** green while you hold aggro, yellow when losing it, red once lost
+- **Tank extras**
+  - **Insecure aggro warning:** while you are tanking but someone else already has more threat, the bar turns orange and pulses
+  - **Who has aggro:** after you lose aggro, the name of the player the enemy is attacking appears below the bar
   - **DPS / Healer:** green while safe, yellow when close to pulling, red once you pull aggro
 - Three styles: bar + text, bar only, text only
 - Text position inside the bar: left, center or right

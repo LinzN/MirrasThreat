@@ -19,12 +19,15 @@ ns.defaults = {
     warnAt   = 80,        -- threshold (in %) for the warning color
     hideZero = true,      -- hide the display while threat is 0 %
     hideSolo = true,      -- only show while in a party or raid
+    tankInsecure   = true, -- tank: orange pulsing bar while aggro is insecure
+    tankShowTarget = true, -- tank: show who the enemy is attacking after losing aggro
 }
 
 ns.colors = {
     good = { 0.30, 0.85, 0.40 },
     warn = { 1.00, 0.78, 0.18 },
     bad  = { 0.95, 0.26, 0.22 },
+    insecure = { 1.00, 0.50, 0.10 },
 }
 
 ns.lastError = nil
@@ -147,6 +150,32 @@ function ns.CreateWidget(parent)
     w.warnBar = CreateZoneBar(w, 1)
     w.highBar = CreateZoneBar(w, 2)
 
+    -- Tank aggro state, driven by the threat status (0-3) instead of the
+    -- percentage. Same gate trick: full-width bars with a tiny value range.
+    --   status 2 = you are tanking, but someone else already has more threat
+    --   status 3 = you are tanking securely
+    w.insecureBar = CreateFrame("StatusBar", nil, w)
+    w.insecureBar:SetFrameLevel(w.bar:GetFrameLevel() + 3)
+    w.insecureBar:SetAllPoints(w.bar)
+    w.insecureBar:SetStatusBarTexture(BAR_TEXTURE)
+    w.insecureBar:SetMinMaxValues(1, 2)
+    w.insecureBar:SetValue(0)
+    local pulse = w.insecureBar:CreateAnimationGroup()
+    pulse:SetLooping("BOUNCE")
+    local fade = pulse:CreateAnimation("Alpha")
+    fade:SetFromAlpha(1)
+    fade:SetToAlpha(0.35)
+    fade:SetDuration(0.45)
+    pulse:Play()
+    w.insecurePulse = pulse
+
+    w.secureBar = CreateFrame("StatusBar", nil, w)
+    w.secureBar:SetFrameLevel(w.bar:GetFrameLevel() + 4)
+    w.secureBar:SetAllPoints(w.bar)
+    w.secureBar:SetStatusBarTexture(BAR_TEXTURE)
+    w.secureBar:SetMinMaxValues(2, 3)
+    w.secureBar:SetValue(0)
+
     -- everything drawn above the fill: frame, threshold marker, text
     w.overlay = CreateFrame("Frame", nil, w)
     w.overlay:SetAllPoints()
@@ -174,6 +203,12 @@ function ns.CreateWidget(parent)
 
     w.text = w.overlay:CreateFontString(nil, "OVERLAY")
     w.text:SetShadowColor(0, 0, 0, 1)
+
+    -- tank: name of the player the enemy is attacking (only after losing aggro)
+    w.aggroText = w.overlay:CreateFontString(nil, "OVERLAY")
+    w.aggroText:SetShadowColor(0, 0, 0, 1)
+    w.aggroText:SetShadowOffset(1, -1)
+    w.aggroText:SetPoint("TOP", w, "BOTTOM", 0, -2)
 
     ns.LayoutWidget(w)
     return w
@@ -255,6 +290,22 @@ function ns.LayoutWidget(w)
     end
 
     if showText then w.text:Show() else w.text:Hide() end
+
+    -- tank extras
+    local isTank = db.mode == "tank"
+    local ins, good = ns.colors.insecure, ns.colors.good
+    w.insecureBar:SetStatusBarColor(ins[1], ins[2], ins[3], 1)
+    w.secureBar:SetStatusBarColor(good[1], good[2], good[3], 1)
+    if isTank and db.tankInsecure and showBar then
+        w.insecureBar:Show()
+        w.secureBar:Show()
+    else
+        w.insecureBar:Hide()
+        w.secureBar:Hide()
+    end
+    w.aggroText:SetFont(STANDARD_TEXT_FONT, math.max(7, db.fontSize - 1), "OUTLINE")
+    if isTank and db.tankShowTarget then w.aggroText:Show() else w.aggroText:Hide() end
+
     w.layoutStamp = ns.layoutStamp
 end
 
@@ -292,9 +343,52 @@ local function ColorSecretText(w, pct, isTanking)
     return "none"
 end
 
+local CLEAR = CreateColor(0, 0, 0, 0)
+local AGGRO_NAME = CreateColor(1, 0.45, 0.35, 1)
+
+-- Tank state: insecure/secure aggro bars and "who has aggro".
+-- status, isTanking and aggroName may all be secret values.
+local function UpdateTankExtras(w, isTanking, status, aggroName)
+    local db = ns.db or ns.defaults
+    if db.mode ~= "tank" then return end
+
+    if db.tankInsecure then
+        local value = 0
+        if IsSecret(status) or status ~= nil then value = status end
+        local ok, err = pcall(function()
+            w.insecureBar:SetValue(value)
+            w.secureBar:SetValue(value)
+        end)
+        if not ok then NoteError("Tank status", err) end
+    end
+
+    if db.tankShowTarget then
+        local ok, err = pcall(function()
+            w.aggroText:SetText(aggroName)
+            -- visible only while someone else has aggro
+            if IsSecret(isTanking) then
+                if C_CurveUtil and C_CurveUtil.EvaluateColorFromBoolean then
+                    local c = C_CurveUtil.EvaluateColorFromBoolean(isTanking, CLEAR, AGGRO_NAME)
+                    w.aggroText:SetTextColor(c:GetRGBA())
+                else
+                    w.aggroText:SetTextColor(0, 0, 0, 0)
+                end
+            elseif isTanking then
+                w.aggroText:SetTextColor(0, 0, 0, 0)
+            else
+                w.aggroText:SetTextColor(AGGRO_NAME:GetRGBA())
+            end
+        end)
+        if not ok then
+            NoteError("Aggro target", err)
+            w.aggroText:SetTextColor(0, 0, 0, 0)
+        end
+    end
+end
+
 -- Sets value and color. `pct` may be a plain number or a secret number,
 -- `isTanking` (optional) may be a plain or secret boolean.
-function ns.RenderWidget(w, pct, isTanking)
+function ns.RenderWidget(w, pct, isTanking, status, aggroName)
     if w.layoutStamp ~= ns.layoutStamp then
         ns.LayoutWidget(w)
     end
@@ -311,6 +405,7 @@ function ns.RenderWidget(w, pct, isTanking)
         if (ns.db or ns.defaults).style == "text" then
             ns.textColorMethod = ColorSecretText(w, pct, isTanking)
         end
+        UpdateTankExtras(w, isTanking, status, aggroName)
         return true
     end
 
@@ -325,6 +420,7 @@ function ns.RenderWidget(w, pct, isTanking)
         w.text:SetTextColor(c[1], c[2], c[3], 1)
     end
     SetBarValues(w, math.min(display, 100))
+    UpdateTankExtras(w, isTanking, status, aggroName)
     return true
 end
 
@@ -470,7 +566,7 @@ local function UpdatePlate(plate, unit)
         return
     end
 
-    local isTanking, _, percent = UnitDetailedThreatSituation("player", unit)
+    local isTanking, status, percent = UnitDetailedThreatSituation("player", unit)
 
     -- nil = not on the threat list. issecretvalue(nil) is false, so this is safe.
     if not IsSecret(percent) and percent == nil then
@@ -491,7 +587,13 @@ local function UpdatePlate(plate, unit)
     HookCastBar(plate)
     AnchorWidget(w, plate)
 
-    if ns.RenderWidget(w, percent, isTanking) then
+    local aggroName
+    if ns.db.mode == "tank" and ns.db.tankShowTarget then
+        local ok, name = pcall(UnitName, unit .. "target")
+        if ok then aggroName = name end
+    end
+
+    if ns.RenderWidget(w, percent, isTanking, status, aggroName) then
         w:Show()
     else
         w:Hide()
@@ -595,6 +697,9 @@ events:SetScript("OnEvent", function(self, event, arg1)
             local ok, err = pcall(AnchorWidget, w, plate, override)
             if not ok then NoteError("Cast event", err) end
         end
+    elseif event == "UNIT_TARGET" then
+        -- an enemy switched targets: refresh "who has aggro"
+        if IsNameplateToken(arg1) then SafeUpdateUnit(arg1) end
     elseif event == "UNIT_THREAT_LIST_UPDATE" then
         if IsNameplateToken(arg1) then
             SafeUpdateUnit(arg1)
@@ -628,6 +733,7 @@ events:RegisterEvent("PLAYER_TARGET_CHANGED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
 events:RegisterEvent("UNIT_THREAT_LIST_UPDATE")
+events:RegisterEvent("UNIT_TARGET")
 events:RegisterEvent("UNIT_THREAT_SITUATION_UPDATE")
 events:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 events:RegisterEvent("NAME_PLATE_UNIT_REMOVED")

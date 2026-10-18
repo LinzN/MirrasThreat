@@ -254,21 +254,12 @@ function ns.RefreshPreview()
     local db = ns.db
     local warnValue = math.min(99, db.warnAt + math.floor((100 - db.warnAt) / 2))
     local values = { 35, warnValue, 100 }
-    local leadSamples = {
-        { tanking = false, amount = -1850, value = 70 },
-        { tanking = true,  amount = 640,   value = 8,  warn = true },
-        { tanking = true,  amount = 12400, value = 65 },
-    }
     for i, p in ipairs(previews) do
         local w = p.threat
         ns.LayoutWidget(w)
         w:ClearAllPoints()
         w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
-        if ns.UseLead() then
-            ns.RenderLead(w, leadSamples[i])
-        else
-            ns.RenderWidget(w, values[i])
-        end
+        ns.RenderWidget(w, values[i])
         w:Show()
         p.caption:ClearAllPoints()
         p.caption:SetPoint("TOP", w, "BOTTOM", 0, -5)
@@ -318,29 +309,18 @@ local function BuildPanel()
         { text = "DPS / Healer", value = "dps",  width = 110 },
     }, h, -8)
 
-    local tankLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    tankLabel:SetPoint("TOPLEFT", role.first, "BOTTOMLEFT", 0, -10)
-    tankLabel:SetText("Tank shows")
-    local tankDisplay = Segmented(panel, "tankDisplay", {
-        { text = "Threat lead", value = "lead",    width = 110 },
-        { text = "Percent",     value = "percent", width = 110 },
-    }, tankLabel, -4)
-
     local roleHint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-    roleHint:SetPoint("TOPLEFT", tankDisplay.first, "BOTTOMLEFT", 0, -6)
+    roleHint:SetPoint("TOPLEFT", role.first, "BOTTOMLEFT", 0, -6)
     roleHint:SetWidth(300)
     roleHint:SetJustifyH("LEFT")
     controls.roleHint = function()
         if ns.db.mode == "dps" then
             roleHint:SetText("Green while you are safe, red once you pull aggro.")
-        elseif ns.db.tankDisplay == "lead" then
-            roleHint:SetText("Threat the next player can still build before pulling.\nGoes towards 0 as they catch up, negative once lost.")
         else
             roleHint:SetText("Green while you hold aggro, red once you lose it.")
         end
     end
     role.onChange = controls.roleHint
-    tankDisplay.onChange = controls.roleHint
 
     h = SectionHeader(panel, "Style", roleHint, -18)
     local style = Segmented(panel, "style", {
@@ -397,7 +377,7 @@ local function BuildPanel()
 
     local hint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     hint:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -14)
-    hint:SetText("Commands: /mthreat tank | dps | lead | percent | debug")
+    hint:SetText("Commands: /mthreat tank, /mthreat dps, /mthreat debug")
 
     panel:SetScript("OnShow", RefreshAll)
 end

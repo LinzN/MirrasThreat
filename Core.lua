@@ -10,7 +10,6 @@ ns.title = "Mirra's Threat"
 
 ns.defaults = {
     mode     = "tank",    -- "tank" or "dps" (DPS / healer)
-    tankDisplay = "lead", -- tank only: "lead" (threat lead) or "percent"
     style    = "bartext", -- "bartext", "bar" or "text"
     width    = 84,
     height   = 13,
@@ -224,9 +223,7 @@ function ns.LayoutWidget(w)
         w.warnBar:Show()
         w.highBar:Show()
 
-        -- in lead mode the bar shows the remaining cushion, so the marker flips
-        local tickAt = ns.UseLead() and (100 - db.warnAt) or db.warnAt
-        local x = (db.width - 2 * inset) * tickAt / 100
+        local x = (db.width - 2 * inset) * db.warnAt / 100
         w.tick:ClearAllPoints()
         w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
         w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
@@ -301,11 +298,6 @@ function ns.RenderWidget(w, pct, isTanking)
     if w.layoutStamp ~= ns.layoutStamp then
         ns.LayoutWidget(w)
     end
-    if w.leadColored then
-        local low = ZoneColors()
-        w.bar:SetStatusBarColor(low[1], low[2], low[3], 1)
-        w.leadColored = nil
-    end
 
     if IsSecret(pct) then
         local ok, err = pcall(function()
@@ -333,156 +325,6 @@ function ns.RenderWidget(w, pct, isTanking)
         w.text:SetTextColor(c[1], c[2], c[3], 1)
     end
     SetBarValues(w, math.min(display, 100))
-    return true
-end
-
----------------------------------------------------------------------------
--- Tank threat lead
---
--- Instead of a percentage, tanks can see how much threat the closest
--- group member can still build before pulling aggro (their "margin").
--- Every group member's threat on the enemy is compared: a member pulls once
--- their distance-scaled threat reaches 100 %, so
---     threat needed to pull = threat * 100 / scaledPercent
---     margin               = threat needed to pull - threat
--- The smallest margin is the tank's lead. When the tank has lost aggro, the
--- value turns negative: the threat still missing to take it back.
--- This needs plain numbers; when the client returns secret threat values,
--- the display falls back to the percentage.
----------------------------------------------------------------------------
-
-local groupUnits = {}
-
--- Other group members and pets. The player's own raid slot is skipped by
--- index, so neither UnitExists nor UnitIsUnit is needed (both can return
--- secret values on WoW Forever). Missing units simply return no threat.
-local function CollectGroupUnits()
-    wipe(groupUnits)
-    if IsInRaid and IsInRaid() then
-        local myIndex = UnitInRaid and UnitInRaid("player")
-        if IsSecret(myIndex) then myIndex = nil end
-        for i = 1, (GetNumGroupMembers and GetNumGroupMembers() or 0) do
-            if i ~= myIndex then
-                groupUnits[#groupUnits + 1] = "raid" .. i
-            end
-            groupUnits[#groupUnits + 1] = "raidpet" .. i
-        end
-    else
-        for i = 1, 4 do
-            groupUnits[#groupUnits + 1] = "party" .. i
-            groupUnits[#groupUnits + 1] = "partypet" .. i
-        end
-    end
-    groupUnits[#groupUnits + 1] = "pet"
-    return groupUnits
-end
-
--- Returns { tanking, amount, value, warn } or nil when it can't be computed
--- (the reason is kept in ns.leadReason for /mthreat debug).
---   amount  lead in threat (positive) or threat missing to regain aggro (negative)
---   value   0..100 for the bar: remaining cushion while tanking,
---           progress towards regaining aggro otherwise
-function ns.ComputeLead(mob)
-    local ok, result = pcall(function()
-        local isTanking, _, scaled, _, threat = UnitDetailedThreatSituation("player", mob)
-        if IsSecret(scaled) or IsSecret(threat) then
-            ns.leadReason = "own threat values are secret"
-            return nil
-        end
-        if threat == nil or scaled == nil then
-            ns.leadReason = "not on the threat list"
-            return nil
-        end
-        -- isTanking may be secret on its own; scaled is 100 while tanking
-        if IsSecret(isTanking) then
-            isTanking = scaled >= 100
-        end
-
-        if not isTanking then
-            if scaled <= 0 then
-                ns.leadReason = "no threat yet"
-                return nil
-            end
-            local need = threat * 100 / scaled
-            ns.leadReason = nil
-            return { tanking = false, amount = -(need - threat), value = scaled }
-        end
-
-        local minMargin, maxScaled, skipped = nil, nil, 0
-        for _, u in ipairs(CollectGroupUnits()) do
-            local _, _, sc, _, tv = UnitDetailedThreatSituation(u, mob)
-            if IsSecret(sc) or IsSecret(tv) then
-                skipped = skipped + 1
-            elseif sc and tv and sc > 0 and tv > 0 then
-                local margin = tv * 100 / sc - tv
-                if not minMargin or margin < minMargin then minMargin = margin end
-                if not maxScaled or sc > maxScaled then maxScaled = sc end
-            end
-        end
-        if skipped > 0 and not minMargin then
-            ns.leadReason = "group threat values are secret"
-            return nil
-        end
-
-        maxScaled = maxScaled or 0
-        ns.leadReason = nil
-        return {
-            tanking = true,
-            amount  = minMargin or threat,   -- nobody else has threat: the whole lead
-            value   = math.max(0, 100 - maxScaled),
-            warn    = maxScaled >= (ns.db or ns.defaults).warnAt,
-        }
-    end)
-    if not ok then
-        ns.leadReason = "error: " .. tostring(result)
-        NoteError("Lead", result)
-        return nil
-    end
-    return result
-end
-
-function ns.FormatThreat(v)
-    local sign = v < 0 and "-" or "+"
-    v = math.abs(v)
-    if v >= 1000000 then
-        return string.format("%s%.1fM", sign, v / 1000000)
-    elseif v >= 10000 then
-        return string.format("%s%.0fk", sign, v / 1000)
-    elseif v >= 1000 then
-        return string.format("%s%.1fk", sign, v / 1000)
-    end
-    return string.format("%s%d", sign, math.floor(v + 0.5))
-end
-
-function ns.UseLead()
-    local db = ns.db or ns.defaults
-    return db.mode == "tank" and db.tankDisplay == "lead"
-end
-
--- Shows a lead computed by ns.ComputeLead (always plain numbers).
-function ns.RenderLead(w, info)
-    if w.layoutStamp ~= ns.layoutStamp then
-        ns.LayoutWidget(w)
-    end
-    local low, mid, high = ZoneColors()
-    local c
-    if not info.tanking then
-        c = low
-    elseif info.warn then
-        c = mid
-    else
-        c = high
-    end
-
-    w.text:SetText(ns.FormatThreat(info.amount))
-    if (ns.db or ns.defaults).style == "text" then
-        w.text:SetTextColor(c[1], c[2], c[3], 1)
-    end
-    w.bar:SetValue(math.min(100, math.max(0, info.value)))
-    w.bar:SetStatusBarColor(c[1], c[2], c[3], 1)
-    w.warnBar:SetValue(0)
-    w.highBar:SetValue(0)
-    w.leadColored = true
     return true
 end
 
@@ -649,11 +491,7 @@ local function UpdatePlate(plate, unit)
     HookCastBar(plate)
     AnchorWidget(w, plate)
 
-    local lead = ns.UseLead() and ns.ComputeLead(unit) or nil
-    if lead then
-        ns.RenderLead(w, lead)
-        w:Show()
-    elseif ns.RenderWidget(w, percent, isTanking) then
+    if ns.RenderWidget(w, percent, isTanking) then
         w:Show()
     else
         w:Hide()
@@ -815,14 +653,6 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         ns.db.mode = "dps"
         ns.ApplySettings()
         Print("role set to DPS / Healer.")
-    elseif msg == "lead" then
-        ns.db.tankDisplay = "lead"
-        ns.ApplySettings()
-        Print("tank display set to threat lead.")
-    elseif msg == "percent" then
-        ns.db.tankDisplay = "percent"
-        ns.ApplySettings()
-        Print("tank display set to percent.")
     elseif msg == "debug" then
         Print("debug")
         print("  Role: " .. tostring(ns.db.mode) .. ", style: " .. tostring(ns.db.style))
@@ -839,16 +669,10 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         else
             print("  Target cast bar: no target nameplate")
         end
-        local _, _, tsc, _, tval = UnitDetailedThreatSituation("player", "target")
-        print("  Mode: " .. tostring(ns.db.mode) .. ", tank display: " .. tostring(ns.db.tankDisplay))
-        print("  Target threat: " .. (IsSecret(tval) and "secret" or tostring(tval))
-            .. ", scaled: " .. (IsSecret(tsc) and "secret" or tostring(tsc)))
-        if Known(UnitExists("target")) ~= false then ns.ComputeLead("target") end
-        print("  Threat lead: " .. (ns.leadReason and ("not available - " .. ns.leadReason) or "OK"))
         print("  Last error: " .. tostring(ns.lastError))
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end
     else
-        Print("commands: /mthreat (options), /mthreat tank, /mthreat dps, /mthreat lead, /mthreat percent, /mthreat debug")
+        Print("commands: /mthreat (options), /mthreat tank, /mthreat dps, /mthreat debug")
     end
 end

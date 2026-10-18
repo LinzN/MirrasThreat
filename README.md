@@ -9,7 +9,6 @@ A lightweight WoW Forever addon that shows your threat on enemy nameplates as a 
 - Threat bar and percentage below every enemy nameplate, styled like the resource bars: rounded frame, glossy fill
 - Role-aware colors
   - **Tank:** green while you hold aggro, yellow when losing it, red once lost
-- **Threat lead for tanks** — instead of a percentage, see how much threat the next player can still build before pulling aggro (e.g. `+12.4k`); it shrinks towards 0 as they catch up and turns negative once you've lost aggro
   - **DPS / Healer:** green while safe, yellow when close to pulling, red once you pull aggro
 - Three styles: bar + text, bar only, text only
 - Text position inside the bar: left, center or right
@@ -30,6 +29,4 @@ Copy the addon into your WoW Forever `Interface/AddOns/MirraThreat/` folder
 | `/mthreat`       | Open the settings              |
 | `/mthreat tank`  | Switch to tank colors          |
 | `/mthreat dps`   | Switch to DPS / healer colors  |
-| `/mthreat lead`  | Tank: show threat lead         |
-| `/mthreat percent` | Tank: show threat percentage |
 | `/mthreat debug` | Print debug information        |

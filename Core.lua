@@ -21,7 +21,17 @@ ns.defaults = {
     hideSolo = true,      -- only show while in a party or raid
     tankInsecure   = true, -- tank: orange pulsing bar while aggro is insecure
     tankShowTarget = true, -- tank: show who the enemy is attacking after losing aggro
+    attach         = true, -- glue the bar to the health bar, cast bar moves below it
+    attachHeight   = 9,    -- bar height on a medium nameplate, scales with the nameplate size
+    attachWidth    = 100,  -- % of the health bar width
+    attachFontSize = 9,    -- text size on a medium nameplate, scales with the nameplate size
+    attachSpacing  = 0,    -- extra space between health bar and threat bar (0 = they share one line)
 }
+
+-- Blizzard's modern nameplate look (Blizzard_NamePlates.xml / UpdateAnchors)
+local PLATE_BAR_ATLAS      = "UI-HUD-CoolDownManager-Bar"
+local PLATE_BG_ATLAS       = "UI-HUD-CoolDownManager-Bar-BG"
+local PLATE_DESELECT_ATLAS = "ui-hud-nameplates-deselected-overlay"
 
 ns.colors = {
     good = { 0.30, 0.85, 0.40 },
@@ -137,15 +147,38 @@ function ns.CreateWidget(parent)
     w:SetFrameStrata(parent:GetFrameStrata())
     w:SetFrameLevel(parent:GetFrameLevel() + 10)
 
-    -- dark trough behind the fill (its corners are covered by the frame)
+    -- dark trough behind the fill (its corners are covered by the frame);
+    -- when attached, bg is the black edge and trough the dark inside
     w.bg = w:CreateTexture(nil, "BACKGROUND")
     w.bg:SetTexture(FLAT)
     w.bg:SetVertexColor(0.03, 0.03, 0.04, 0.85)
+    w.trough = w:CreateTexture(nil, "BACKGROUND", nil, 1)
+    w.trough:SetTexture(FLAT)
+    w.trough:SetVertexColor(0.03, 0.03, 0.04, 0.9)
+
+    -- Blizzard's nameplate bar background, drawn unchanged but clipped at
+    -- the top: its top edge is cut off, so the health bar's bottom line is
+    -- the only line between the two bars (stretching the art instead would
+    -- shift the frame against the bar)
+    w.bgClip = CreateFrame("Frame", nil, w)
+    w.bgClip:SetFrameLevel(w:GetFrameLevel())
+    w.bgClip:SetClipsChildren(true)
+    -- the art lives on a child frame: child frames are always clipped
+    w.bgArt = CreateFrame("Frame", nil, w.bgClip)
+    w.bgArt:SetFrameLevel(w:GetFrameLevel())
+    w.plateBg = w.bgArt:CreateTexture(nil, "BACKGROUND")
+    w.plateBg:SetAllPoints()
+    w.plateBg:SetAtlas(PLATE_BG_ATLAS)
+    w.bgClip:Hide()
 
     w.bar = CreateFrame("StatusBar", nil, w)
+    w.bar:SetFrameLevel(w:GetFrameLevel() + 1)
     w.bar:SetStatusBarTexture(BAR_TEXTURE)
     w.bar:SetMinMaxValues(0, 100)
     w.bar:SetValue(0)
+    -- the warning marker follows the bar's real width (attached bars take
+    -- the width of the nameplate)
+    w.bar:SetScript("OnSizeChanged", function() ns.PlaceTick(w) end)
 
     w.warnBar = CreateZoneBar(w, 1)
     w.highBar = CreateZoneBar(w, 2)
@@ -180,6 +213,12 @@ function ns.CreateWidget(parent)
     w.overlay = CreateFrame("Frame", nil, w)
     w.overlay:SetAllPoints()
     w.overlay:SetFrameLevel(w.bar:GetFrameLevel() + 5)
+
+    -- darkening when the enemy is not your target, like the health bar
+    w.dim = w.overlay:CreateTexture(nil, "ARTWORK")
+    w.dim:SetPoint("TOPLEFT", w.bar, "TOPLEFT", 0, 0)
+    w.dim:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 0, -1)
+    w.dim:Hide()
 
     -- marker at the warning threshold
     w.tick = w.overlay:CreateTexture(nil, "BACKGROUND")
@@ -222,6 +261,37 @@ local function ZoneColors()
     return c.bad, c.warn, c.good
 end
 
+-- true when the player uses Blizzard's modern nameplate style
+-- (classic style has its own fixed border art)
+function ns.IsModernPlate()
+    local o = NamePlateSetupOptions
+    return not (o and o.useClassicHealthBar)
+end
+
+-- Fill textures: Blizzard's nameplate bar atlas or the Mirra's glossy bar.
+local function SetBarTextures(w, plateLook)
+    if w.plateLook == plateLook then return end
+    w.plateLook = plateLook
+    for _, b in ipairs({ w.bar, w.warnBar, w.highBar, w.insecureBar, w.secureBar }) do
+        b:SetStatusBarTexture(BAR_TEXTURE)
+        if plateLook then
+            b:GetStatusBarTexture():SetAtlas(PLATE_BAR_ATLAS)
+        end
+    end
+end
+
+-- Attached scale: the settings are for a medium nameplate.
+local function PlateScale()
+    local scale = NamePlateSetupOptions and NamePlateSetupOptions.verticalScale
+    if type(scale) ~= "number" or IsSecret(scale) or scale <= 0 then scale = 1 end
+    return scale
+end
+
+function ns.AttachedFontSize()
+    local db = ns.db or ns.defaults
+    return math.max(6, math.floor(db.attachFontSize * PlateScale() + 0.5))
+end
+
 function ns.LayoutWidget(w)
     local db = ns.db or ns.defaults
     local showBar  = db.style ~= "text"
@@ -236,8 +306,90 @@ function ns.LayoutWidget(w)
     w.highBar:SetMinMaxValues(99, 100)
 
     w.text:ClearAllPoints()
+    w.aggroText:ClearAllPoints()
+    w.aggroText:SetPoint("TOP", w, "BOTTOM", 0, -2)
+    w.aggroText:SetJustifyH("CENTER")
+    w.trough:Hide()
 
-    if showBar then
+    w.dim:Hide()
+    w.bgClip:Hide()
+    w.attachedModern = false
+
+    if showBar and w.attached then
+        -- glued under the health bar; width comes from the anchors,
+        -- height and text scale with the nameplate size
+        local h = ns.AttachedHeight()
+        local modern = ns.IsModernPlate()
+        w.attachedModern = modern
+        w:SetHeight(h)
+        for _, t in ipairs({ w.frameL, w.frameM, w.frameR }) do t:Hide() end
+        SetBarTextures(w, modern)
+
+        w.bar:ClearAllPoints()
+        w.bg:ClearAllPoints()
+        w.bgClip:ClearAllPoints()
+        w.bgArt:ClearAllPoints()
+        if modern then
+            -- exactly like Blizzard's health bar background (same offsets),
+            -- only the part above the bar is clipped away: the health bar's
+            -- bottom line is the threat bar's top line
+            w.bar:SetAllPoints()
+            w.bgArt:SetPoint("TOPLEFT", w.bar, "TOPLEFT", -2, 3)
+            w.bgArt:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 6, -6)
+            w.bgClip:SetPoint("TOPLEFT", w.bar, "TOPLEFT", -2, 0)
+            w.bgClip:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 6, -6)
+            w.bgClip:Show()
+            w.bg:Hide()
+            w.dim:SetAtlas(PLATE_DESELECT_ATLAS)
+            w.tick:SetVertexColor(0, 0, 0, 0.35)
+        else
+            w.bgClip:Hide()
+            w.bg:Show()
+            -- classic style: flat black edge
+            w.bg:SetAllPoints()
+            w.bg:SetVertexColor(0, 0, 0, 1)
+            w.trough:ClearAllPoints()
+            -- no top edge: the line above belongs to the health bar
+            w.trough:SetPoint("TOPLEFT", 1, 0)
+            w.trough:SetPoint("BOTTOMRIGHT", -1, 1)
+            w.trough:Show()
+            w.bar:SetPoint("TOPLEFT", 1, 0)
+            w.bar:SetPoint("BOTTOMRIGHT", -1, 1)
+            w.tick:SetVertexColor(1, 0.85, 0.35, 0.9)
+        end
+        w.bar:Show()
+        w.warnBar:Show()
+        w.highBar:Show()
+        w.tick:Show()
+
+        -- same font as the nameplate's health text
+        local font, _, flags = STANDARD_TEXT_FONT, nil, ""
+        if SystemFont_NamePlate and SystemFont_NamePlate.GetFont then
+            local f, _, fl = SystemFont_NamePlate:GetFont()
+            if f then font, flags = f, fl or "" end
+        end
+        local size = ns.AttachedFontSize()
+        w.text:SetFont(font, size, flags)
+        w.text:SetShadowOffset(1, -1)
+        w.text:SetTextColor(1, 1, 1, 1)
+        local pad = 5
+        local align = db.textAlign
+        -- the "who has aggro" name sits inside the bar on the left
+        if db.mode == "tank" and db.tankShowTarget then align = "RIGHT" end
+        if align == "CENTER" then
+            w.text:SetPoint("CENTER", w, "CENTER", 0, 0)
+        elseif align == "RIGHT" then
+            w.text:SetPoint("RIGHT", w, "RIGHT", -pad, 0)
+        else
+            w.text:SetPoint("LEFT", w, "LEFT", pad, 0)
+        end
+        w.aggroText:ClearAllPoints()
+        w.aggroText:SetPoint("LEFT", w, "LEFT", pad, 0)
+        w.aggroText:SetPoint("RIGHT", w.text, "LEFT", -4, 0)
+        w.aggroText:SetJustifyH("LEFT")
+        w.aggroText:SetWordWrap(false)
+    elseif showBar then
+        SetBarTextures(w, false)
         local h = db.height
         local inset = h * 4 / 32          -- matches the frame texture's border
         w:SetSize(db.width, h)
@@ -249,6 +401,7 @@ function ns.LayoutWidget(w)
         w.bg:ClearAllPoints()
         w.bg:SetPoint("TOPLEFT", inset, -inset)
         w.bg:SetPoint("BOTTOMRIGHT", -inset, inset)
+        w.bg:SetVertexColor(0.03, 0.03, 0.04, 0.85)
         w.bg:Show()
 
         w.bar:ClearAllPoints()
@@ -258,10 +411,7 @@ function ns.LayoutWidget(w)
         w.warnBar:Show()
         w.highBar:Show()
 
-        local x = (db.width - 2 * inset) * db.warnAt / 100
-        w.tick:ClearAllPoints()
-        w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
-        w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
+        w.tick:SetVertexColor(0, 0, 0, 0.3)
         w.tick:Show()
 
         -- resource bar look: light text with a soft shadow, inside the bar
@@ -303,10 +453,50 @@ function ns.LayoutWidget(w)
         w.insecureBar:Hide()
         w.secureBar:Hide()
     end
-    w.aggroText:SetFont(STANDARD_TEXT_FONT, math.max(7, db.fontSize - 1), "OUTLINE")
+    local aggroSize = math.max(7, db.fontSize - 1)
+    if showBar and w.attached then
+        aggroSize = ns.AttachedFontSize()
+    end
+    w.aggroText:SetFont(STANDARD_TEXT_FONT, aggroSize, "OUTLINE")
     if isTank and db.tankShowTarget then w.aggroText:Show() else w.aggroText:Hide() end
 
+    ns.PlaceTick(w)
     w.layoutStamp = ns.layoutStamp
+end
+
+-- Height of an attached bar: the setting is for a medium nameplate and
+-- scales with the nameplate size the player picked (small ... huge).
+function ns.AttachedHeight()
+    local db = ns.db or ns.defaults
+    return math.max(4, math.floor(db.attachHeight * PlateScale() + 0.5))
+end
+
+-- Distance from the health bar's fill to the threat bar's fill: the
+-- health bar's bottom edge line (shared by both bars) plus extra spacing.
+local SHARED_LINE_MODERN  = 2   -- bottom edge of Blizzard's bar background art
+local SHARED_LINE_CLASSIC = 1
+function ns.AttachedGap()
+    local db = ns.db or ns.defaults
+    local line = ns.IsModernPlate() and SHARED_LINE_MODERN or SHARED_LINE_CLASSIC
+    return line + math.floor(db.attachSpacing * PlateScale() + 0.5)
+end
+
+-- Room the cast bar has to move down: gap + bar (+ shadow of the bar art).
+function ns.AttachedRoom()
+    -- the modern bar art has a soft shadow below the bar, keep it off the cast bar
+    local shadow = ns.IsModernPlate() and 4 or 0
+    return ns.AttachedGap() + ns.AttachedHeight() + shadow
+end
+
+-- Warning marker at warnAt % of the bar's actual width.
+function ns.PlaceTick(w)
+    local db = ns.db or ns.defaults
+    local ok, width = pcall(w.bar.GetWidth, w.bar)
+    if not ok or not width or IsSecret(width) or width <= 0 then return end
+    local x = width * db.warnAt / 100
+    w.tick:ClearAllPoints()
+    w.tick:SetPoint("TOPLEFT", w.bar, "TOPLEFT", x, 0)
+    w.tick:SetPoint("BOTTOMLEFT", w.bar, "BOTTOMLEFT", x, 0)
 end
 
 local function SetBarValues(w, pct)
@@ -479,10 +669,258 @@ local function CastBarIsBelow(castBar, healthAnchor)
     return (not ok) or below
 end
 
--- Places the widget under the health bar, or under the cast bar while
--- the enemy is casting. Casting is detected from the unit (events + API)
--- and from the cast bar frame itself, whichever reports it.
+---------------------------------------------------------------------------
+-- Attached mode: the bar is glued under the health bar and the cast bar
+-- moves down to make room for it.
+--
+-- Blizzard's nameplate (Blizzard_NamePlateUnitFrame.lua, UpdateAnchors) is
+-- built from the bottom: CastBarsContainer at the bottom of the plate, the
+-- HealthBarsContainer anchored on top of it. To make room we move the cast
+-- bar container down by the bar height and the health bar container up by
+-- the same amount relative to it, so the health bar and the name stay
+-- exactly where Blizzard put them, for every nameplate style and size.
+---------------------------------------------------------------------------
+
+local rooms  = setmetatable({}, { __mode = "k" })   -- [unitFrame] = room in px
+local hooked = setmetatable({}, { __mode = "k" })   -- [unitFrame] = plate
+local attachFailed = setmetatable({}, { __mode = "k" })
+
+local function CanAttach(plate)
+    local uf = plate.UnitFrame
+    return uf ~= nil
+        and not attachFailed[uf]
+        and type(uf.HealthBarsContainer) == "table"
+        and type(uf.CastBarsContainer) == "table"
+        and type(uf.UpdateAnchors) == "function"
+        and not (uf.IsForbidden and uf:IsForbidden())
+        and uf:IsShown()          -- hidden: another nameplate addon draws the plate
+end
+
+-- Offsets the points of `frame` that are anchored to `relTo` by dy.
+-- Everything is read and computed first, so a failure never leaves the
+-- frame without anchors.
+local function ShiftedPoints(frame, relTo, dy)
+    local points = {}
+    for i = 1, frame:GetNumPoints() do
+        local p, rel, rp, x, y = frame:GetPoint(i)
+        x, y = x or 0, y or 0
+        if rel == relTo then y = y + dy end
+        points[i] = { p, rel, rp, x, y }
+    end
+    return points
+end
+
+local function ApplyPoints(frame, points)
+    frame:ClearAllPoints()
+    for _, p in ipairs(points) do
+        frame:SetPoint(p[1], p[2], p[3], p[4], p[5])
+    end
+end
+
+-- Second way: rebuild the anchors the way Blizzard's UpdateAnchors does,
+-- from NamePlateSetupOptions, with the room added. Used when the current
+-- anchors can't be read.
+local function ComputedPoints(uf, room)
+    local o = NamePlateSetupOptions or {}
+    local inset = tonumber(o.insetWidth) or 12
+    local spacing = tonumber(o.castBarToHealthBarSpacing) or 2
+    local cast = uf.CastBarsContainer
+    local xOffset = 0
+    local level = uf.PlayerLevelDiffFrame
+    if level and level:IsShown() then
+        local ok, _, _, relPoint, ox = pcall(level.GetPoint, level, 1)
+        if ok and relPoint == "RIGHT" then
+            xOffset = -(level:GetWidth() + math.abs(tonumber(ox) or 0))
+        end
+    end
+    local castPoints = {
+        { "BOTTOMLEFT", uf, "BOTTOMLEFT", inset, -room },
+        { "BOTTOMRIGHT", uf, "BOTTOMRIGHT", -inset, -room },
+    }
+    local healthPoints = {
+        { "BOTTOMLEFT", cast, "TOPLEFT", 0, spacing + room },
+        { "BOTTOMRIGHT", cast, "TOPRIGHT", xOffset, spacing + room },
+    }
+    return castPoints, healthPoints
+end
+
+ns.attachStats = { ok = 0, computed = 0, failed = 0 }
+
+local function SetRoom(uf, target)
+    local current = rooms[uf] or 0
+    if current == target then return true end
+    local cast, health = uf.CastBarsContainer, uf.HealthBarsContainer
+
+    -- 1) shift Blizzard's current anchors by the difference
+    local delta = target - current
+    local ok, err = pcall(function()
+        local castPoints = ShiftedPoints(cast, uf, -delta)
+        local healthPoints = ShiftedPoints(health, cast, delta)
+        ApplyPoints(cast, castPoints)
+        ApplyPoints(health, healthPoints)
+    end)
+    if ok then
+        rooms[uf] = target
+        ns.attachStats.ok = ns.attachStats.ok + 1
+        return true
+    end
+    ns.attachError = "shift: " .. tostring(err)
+
+    -- 2) rebuild the anchors from the nameplate options
+    local ok2, err2 = pcall(function()
+        local castPoints, healthPoints = ComputedPoints(uf, target)
+        ApplyPoints(cast, castPoints)
+        ApplyPoints(health, healthPoints)
+    end)
+    if ok2 then
+        rooms[uf] = target
+        ns.attachStats.computed = ns.attachStats.computed + 1
+        return true
+    end
+
+    ns.attachError = ns.attachError .. " | rebuild: " .. tostring(err2)
+    NoteError("Attach", ns.attachError)
+    ns.attachStats.failed = ns.attachStats.failed + 1
+    attachFailed[uf] = true      -- fall back to the floating bar
+    return false
+end
+
+-- Blizzard re-anchors the whole nameplate (size/style change, new unit):
+-- it starts from scratch, so our room is gone and is added again.
+-- Unit frames are pooled and move between nameplates, so the plate is
+-- looked up when the hook fires.
+local function HookAnchors(uf, plate)
+    local first = hooked[uf] == nil
+    hooked[uf] = plate
+    if not first then return end
+    hooksecurefunc(uf, "UpdateAnchors", function(self)
+        rooms[self] = 0
+        local p = self:GetParent() or hooked[self]
+        local w = widgets[p]
+        if w and w.attached and w:IsShown() and ns.db then
+            ns.LayoutWidget(w)
+            SetRoom(self, ns.AttachedRoom())
+            ns.LinkPlate(self, w)
+        end
+    end)
+end
+
+---------------------------------------------------------------------------
+-- Making the bar part of the nameplate: the yellow target border is
+-- stretched around both bars, and the "not your target" darkening of the
+-- health bar is mirrored on the threat bar.
+---------------------------------------------------------------------------
+
+local overlayOwner = setmetatable({}, { __mode = "k" })  -- [deselectedOverlay] = unitFrame
+local linkedBorder = setmetatable({}, { __mode = "k" })  -- [unitFrame] = true
+
+local function MirrorDim(uf)
+    local hb = uf and uf.HealthBarsContainer and uf.HealthBarsContainer.healthBar
+    local w = uf and widgets[uf:GetParent()]
+    if not (hb and w) then return end
+    local ok, shown = pcall(function() return hb.deselectedOverlay:IsShown() end)
+    w.dim:SetShown(ok and w.attachedModern and w.attached and shown == true or false)
+end
+
+local function RestoreBorder(uf)
+    if not linkedBorder[uf] then return end
+    linkedBorder[uf] = nil
+    pcall(function()
+        local hb = uf.HealthBarsContainer.healthBar
+        local o = NamePlateConstants and NamePlateConstants.SELECTED_BORDER_OFFSETS
+        hb.selectedBorder:SetPoint("BOTTOMRIGHT", hb.bgTexture, "BOTTOMRIGHT",
+            o and o.bottomRightX or 0, o and o.bottomRightY or 0)
+    end)
+end
+
+function ns.LinkPlate(uf, w)
+    local hb = uf.HealthBarsContainer and uf.HealthBarsContainer.healthBar
+    if not hb then return end
+
+    if w.attachedModern then
+        -- one yellow frame around health bar and threat bar
+        local ok = pcall(function()
+            local o = NamePlateConstants and NamePlateConstants.SELECTED_BORDER_OFFSETS
+            hb.selectedBorder:SetPoint("BOTTOMRIGHT", w.plateBg, "BOTTOMRIGHT",
+                o and o.bottomRightX or 0, o and o.bottomRightY or 0)
+        end)
+        if ok then linkedBorder[uf] = true end
+    else
+        RestoreBorder(uf)
+    end
+
+    local overlay = hb.deselectedOverlay
+    if overlay and not overlayOwner[overlay] then
+        overlayOwner[overlay] = uf
+        local function sync(self) MirrorDim(overlayOwner[self]) end
+        hooksecurefunc(overlay, "SetShown", sync)
+        hooksecurefunc(overlay, "Show", sync)
+        hooksecurefunc(overlay, "Hide", sync)
+    elseif overlay then
+        overlayOwner[overlay] = uf
+    end
+    MirrorDim(uf)
+end
+
+local function RemoveRoom(plate)
+    local uf = plate and plate.UnitFrame
+    if not uf then return end
+    RestoreBorder(uf)
+    if rooms[uf] and rooms[uf] ~= 0 then SetRoom(uf, 0) end
+end
+
+local function AttachWidget(w, plate)
+    local db = ns.db
+    local uf = plate.UnitFrame
+    local healthBar = GetPlateAnchor(plate)
+    HookAnchors(uf, plate)
+    if not w.attached then
+        w.attached = true
+        ns.LayoutWidget(w)
+    end
+
+    -- width: a share of the health bar, centered under it
+    local inset = 0
+    if db.attachWidth < 100 then
+        local ok, width = pcall(healthBar.GetWidth, healthBar)
+        if ok and type(width) == "number" and not IsSecret(width) then
+            inset = width * (100 - db.attachWidth) / 200
+        end
+    end
+    local gap = ns.AttachedGap()
+    if w.anchor ~= healthBar or w.anchorMode ~= "attached" or w.anchorY ~= gap or w.anchorX ~= inset then
+        w:ClearAllPoints()
+        -- same width as the health bar, also for the classic style where the
+        -- health bar is inset inside its container
+        w:SetPoint("TOPLEFT", healthBar, "BOTTOMLEFT", inset, -gap)
+        w:SetPoint("TOPRIGHT", healthBar, "BOTTOMRIGHT", -inset, -gap)
+        w.anchor, w.anchorY, w.anchorX, w.anchorMode = healthBar, gap, inset, "attached"
+    end
+    if not SetRoom(uf, ns.AttachedRoom()) then return false end
+    ns.LinkPlate(uf, w)
+    return true
+end
+
+-- Attached mode when possible, otherwise the floating bar below.
+local AnchorFloating
 local function AnchorWidget(w, plate, castingOverride)
+    local db = ns.db
+    if db.attach and db.style ~= "text" and CanAttach(plate) then
+        if AttachWidget(w, plate) then return end
+    end
+    if w.attached then
+        w.attached = false
+        w.anchor, w.anchorMode = nil, nil
+        ns.LayoutWidget(w)
+    end
+    RemoveRoom(plate)
+    AnchorFloating(w, plate, castingOverride)
+end
+
+-- Floating bar: under the health bar, or under the cast bar while the
+-- enemy is casting. Casting is detected from the unit (events + API)
+-- and from the cast bar frame itself, whichever reports it.
+AnchorFloating = function(w, plate, castingOverride)
     local anchor = GetPlateAnchor(plate)
     local castBar = GetCastBar(plate)
 
@@ -525,7 +963,7 @@ local function HookCastBar(plate)
     hookedCastBars[castBar] = true
     local function OnVisibility(shown)
         local w = widgets[plate]
-        if w and ns.db then
+        if w and ns.db and w:IsShown() then
             w.castBarShown = shown
             local ok, err = pcall(AnchorWidget, w, plate)
             if not ok then NoteError("Cast bar", err) end
@@ -541,6 +979,7 @@ end
 local function HidePlate(plate)
     local w = plate and widgets[plate]
     if w then w:Hide() end
+    RemoveRoom(plate)
 end
 
 local function UpdatePlate(plate, unit)
@@ -585,7 +1024,6 @@ local function UpdatePlate(plate, unit)
         w.castBarShown = nil
     end
     HookCastBar(plate)
-    AnchorWidget(w, plate)
 
     local aggroName
     if ns.db.mode == "tank" and ns.db.tankShowTarget then
@@ -594,9 +1032,11 @@ local function UpdatePlate(plate, unit)
     end
 
     if ns.RenderWidget(w, percent, isTanking, status, aggroName) then
+        -- anchored only while shown, so hidden bars never reserve room
+        AnchorWidget(w, plate)
         w:Show()
     else
-        w:Hide()
+        HidePlate(plate)
     end
 end
 
@@ -613,7 +1053,7 @@ function ns.ApplySettings()
     ns.layoutStamp = ns.layoutStamp + 1
     ns.RebuildCurve()
     for plate, w in pairs(widgets) do
-        w.anchor, w.anchorY = nil, nil
+        w.anchor, w.anchorY, w.anchorMode = nil, nil, nil
         ns.LayoutWidget(w)
     end
     ns.UpdateAll()
@@ -691,7 +1131,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         -- enemy started/stopped casting: move the display below/back up
         local plate = GetPlate(arg1)
         local w = plate and widgets[plate]
-        if w then
+        if w and w:IsShown() then
             w.unit = arg1
             local override = CAST_EVENTS[event] or nil   -- true on start, API check otherwise
             local ok, err = pcall(AnchorWidget, w, plate, override)
@@ -766,6 +1206,7 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         print("  Secret values: " .. tostring(issecretvalue ~= nil))
         print("  Color curve: " .. tostring(colorCurve ~= nil))
         print("  Text color method: " .. tostring(ns.textColorMethod or "-"))
+        print("  Attach to nameplate: " .. tostring(ns.db.attach) .. ", bar height: " .. tostring(ns.AttachedHeight()))
         local okp, tplate = pcall(C_NamePlate.GetNamePlateForUnit, "target")
         if okp and tplate then
             local cb, key = GetCastBar(tplate)
@@ -775,6 +1216,22 @@ SlashCmdList["MIRRATHREAT"] = function(msg)
         else
             print("  Target cast bar: no target nameplate")
         end
+        local st = ns.attachStats
+        print(string.format("  Attach: shifted %d, rebuilt %d, failed %d", st.ok, st.computed, st.failed))
+        if okp and tplate then
+            local uf = tplate.UnitFrame
+            local w = widgets[tplate]
+            print("  Target plate: UnitFrame " .. tostring(uf ~= nil)
+                .. ", health container " .. tostring(uf and uf.HealthBarsContainer ~= nil)
+                .. ", cast container " .. tostring(uf and uf.CastBarsContainer ~= nil)
+                .. ", can attach " .. tostring(CanAttach(tplate)))
+            print("  Target bar: shown " .. tostring(w and w:IsShown())
+                .. ", attached " .. tostring(w and w.attached)
+                .. ", room " .. tostring(uf and rooms[uf])
+                .. ", failed " .. tostring(uf and attachFailed[uf] or false))
+            print("  Other nameplate addon: " .. tostring(uf and uf.IsVisible and not uf:IsVisible()))
+        end
+        print("  Attach error: " .. tostring(ns.attachError))
         print("  Last error: " .. tostring(ns.lastError))
     elseif msg == "" or msg == "options" or msg == "config" then
         if ns.OpenOptions then ns.OpenOptions() end

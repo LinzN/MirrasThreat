@@ -36,7 +36,7 @@ local function Changed()
     ns.ApplySettings()
 end
 
-local function SectionHeader(parent, text, anchor, y)
+local function SectionHeader(parent, text, anchor, y, width)
     local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     fs:SetText(string.upper(text))
     fs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
@@ -47,7 +47,7 @@ local function SectionHeader(parent, text, anchor, y)
     line:SetVertexColor(GOLD[1], GOLD[2], GOLD[3], 0.25)
     line:SetHeight(1)
     line:SetPoint("LEFT", fs, "RIGHT", 8, 0)
-    line:SetWidth(300 - fs:GetStringWidth() - 8)
+    line:SetWidth((width or 300) - fs:GetStringWidth() - 8)
     return fs
 end
 
@@ -243,6 +243,33 @@ local function CreateMockPlate(parent, name, x, y)
     hpBorder:SetPoint("TOPLEFT", -1, 1)
     hpBorder:SetPoint("BOTTOMRIGHT", 1, -1)
     p.hp = hp
+    p.hpBorder = hpBorder
+    p.hpDim = hp:CreateTexture(nil, "OVERLAY")
+    p.hpDim:SetPoint("TOPLEFT", 0, 1)
+    p.hpDim:SetPoint("BOTTOMRIGHT", 0, -1)
+    p.hpDim:Hide()
+    p.sel = p:CreateTexture(nil, "OVERLAY")
+    p.sel:Hide()
+
+    -- mock enemy cast bar (only used by the second plate)
+    local cast = CreateFrame("StatusBar", nil, p)
+    cast:SetSize(120, 9)
+    cast:SetStatusBarTexture(BAR_TEXTURE)
+    cast:SetStatusBarColor(1.0, 0.72, 0.12)
+    cast:SetMinMaxValues(0, 1)
+    cast:SetValue(0.6)
+    local castBorder = cast:CreateTexture(nil, "BACKGROUND")
+    castBorder:SetTexture(FLAT)
+    castBorder:SetVertexColor(0, 0, 0, 1)
+    castBorder:SetPoint("TOPLEFT", -1, 1)
+    castBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+    cast.text = cast:CreateFontString(nil, "OVERLAY")
+    cast.text:SetFont(STANDARD_TEXT_FONT, 8, "")
+    cast.text:SetShadowOffset(1, -1)
+    cast.text:SetPoint("CENTER")
+    cast.text:SetText("Frostbolt")
+    cast:Hide()
+    p.cast = cast
 
     p.caption = p:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     p.threat = ns.CreateWidget(p)
@@ -250,6 +277,7 @@ local function CreateMockPlate(parent, name, x, y)
 end
 
 function ns.RefreshPreview()
+    if ns.UpdateSizeGroups and ns.db then ns.UpdateSizeGroups() end
     if not panel or not panel:IsShown() or #previews == 0 then return end
     local db = ns.db
     local warnValue = math.min(99, db.warnAt + math.floor((100 - db.warnAt) / 2))
@@ -263,9 +291,64 @@ function ns.RefreshPreview()
     if not db.tankInsecure then tankSamples[2] = { warnValue, false, 0, "Stabby" } end
     for i, p in ipairs(previews) do
         local w = p.threat
+        w.attached = db.attach and db.style ~= "text"
+        local modern = w.attached and ns.IsModernPlate()
+
+        -- mock health bar in the same look as the real nameplate
+        p.hp:SetStatusBarTexture(BAR_TEXTURE)
+        p.hpBorder:ClearAllPoints()
+        if modern then
+            p.hp:SetHeight(13)
+            p.hp:GetStatusBarTexture():SetAtlas("UI-HUD-CoolDownManager-Bar")
+            p.hpBorder:SetAtlas("UI-HUD-CoolDownManager-Bar-BG")
+            p.hpBorder:SetVertexColor(1, 1, 1, 1)
+            p.hpBorder:SetPoint("TOPLEFT", -2, 3)
+            p.hpBorder:SetPoint("BOTTOMRIGHT", 6, -6)
+            p.hpDim:SetAtlas("ui-hud-nameplates-deselected-overlay")
+        else
+            p.hp:SetHeight(10)
+            p.hpBorder:SetTexture(FLAT)
+            p.hpBorder:SetTexCoord(0, 1, 0, 1)
+            p.hpBorder:SetVertexColor(0, 0, 0, 1)
+            p.hpBorder:SetPoint("TOPLEFT", -1, 1)
+            p.hpBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+        end
+        p.hp:SetStatusBarColor(0.80, 0.12, 0.10)
+
         ns.LayoutWidget(w)
         w:ClearAllPoints()
-        w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
+        local casting = (i == 2)
+        p.cast:ClearAllPoints()
+        if w.attached then
+            -- glued to the health bar, the cast bar goes below it
+            local inset = 120 * (100 - db.attachWidth) / 200
+            local gap = (modern and 2 or 1) + db.attachSpacing
+            w:SetPoint("TOPLEFT", p.hp, "BOTTOMLEFT", inset, -gap)
+            w:SetPoint("TOPRIGHT", p.hp, "BOTTOMRIGHT", -inset, -gap)
+            p.cast:SetPoint("TOP", w, "BOTTOM", 0, -4)
+        elseif casting then
+            -- floating: the bar moves below the cast bar
+            p.cast:SetPoint("TOP", p.hp, "BOTTOM", 0, -3)
+            w:SetPoint("TOP", p.cast, "BOTTOM", 0, -2 + db.offsetY)
+        else
+            w:SetPoint("TOP", p.hp, "BOTTOM", 0, -2 + db.offsetY)
+        end
+        p.cast:SetShown(casting)
+
+        -- plate 1 is the target: one yellow frame around both bars,
+        -- the others are darkened like real nameplates
+        local isTarget = (i == 1)
+        p.sel:ClearAllPoints()
+        if modern and isTarget then
+            p.sel:SetAtlas("UI-HUD-CoolDownManager-Selected-yellow")
+            p.sel:SetPoint("TOPLEFT", p.hpBorder, "TOPLEFT", -3, 2)
+            p.sel:SetPoint("BOTTOMRIGHT", w.plateBg, "BOTTOMRIGHT", 0, 2)
+            p.sel:Show()
+        else
+            p.sel:Hide()
+        end
+        p.hpDim:SetShown(modern and not isTarget)
+        w.dim:SetShown(modern and not isTarget)
         if db.mode == "tank" then
             ns.RenderWidget(w, tankSamples[i][1], tankSamples[i][2], tankSamples[i][3], tankSamples[i][4])
         else
@@ -273,8 +356,10 @@ function ns.RefreshPreview()
         end
         w:Show()
         p.caption:ClearAllPoints()
-        local capY = (db.mode == "tank" and db.tankShowTarget) and -(db.fontSize + 6) or -5
-        p.caption:SetPoint("TOP", w, "BOTTOM", 0, capY)
+        local below = w
+        if casting and w.attached then below = p.cast end
+        local capY = (db.mode == "tank" and db.tankShowTarget and not w.attached) and -(db.fontSize + 6) or -5
+        p.caption:SetPoint("TOP", below, "BOTTOM", 0, capY)
     end
 
     if db.mode == "dps" then
@@ -293,6 +378,7 @@ end
 ---------------------------------------------------------------------------
 
 local function RefreshAll()
+    if ns.UpdateSizeGroups then ns.UpdateSizeGroups() end
     refreshing = true
     for _, c in ipairs(controls) do c:Refresh() end
     refreshing = false
@@ -352,18 +438,40 @@ local function BuildPanel()
         { text = "Text right",  value = "RIGHT",  width = 96 },
     }, style.first, -6)
 
-    h = SectionHeader(panel, "Size & Position", align.first, -18)
-    local a = Slider(panel, "width",    "Width",           40, 160, 2, "%d px", h, -10)
-    a = Slider(panel, "height",   "Bar height",       6,  24, 1, "%d px", a, -8)
-    a = Slider(panel, "fontSize", "Font size",        7,  20, 1, "%d",    a, -8)
-    a = Slider(panel, "offsetY",  "Vertical offset", -30, 30, 1, "%d px", a, -8)
+    local attach = Checkbox(panel, "attach", "Attach to the nameplate",
+        "Makes the bar part of the nameplate: directly under the health bar, in the same look, inside the target border. The enemy cast bar moves below it. Works with every nameplate size and style; sizes scale with the nameplate.", align.first, -8)
 
-    h = SectionHeader(panel, "Behavior", a, -16)
-    a = Slider(panel, "warnAt", "Warning color at", 50, 99, 1, "%d %%", h, -10)
-    a = Checkbox(panel, "hideZero", "Hide at 0% threat",
-        "Hides the display while you have no threat on that enemy.", a, -6)
-    a = Checkbox(panel, "hideSolo", "Only show in a group",
-        "Hides threat while you are playing solo.", a, -2)
+    h = SectionHeader(panel, "Size", attach, -14)
+
+    -- attached and floating bars have their own size settings; only the
+    -- group for the current mode is shown, in the same place
+    local function Group()
+        local g = CreateFrame("Frame", nil, panel)
+        g:SetSize(300, 1)
+        g:SetPoint("TOPLEFT", h, "BOTTOMLEFT", 0, 0)
+        local top = CreateFrame("Frame", nil, g)
+        top:SetSize(1, 1)
+        top:SetPoint("TOPLEFT")
+        return g, top
+    end
+
+    local attachedGroup, a = Group()
+    a = Slider(attachedGroup, "attachHeight",   "Bar height",            5,  20, 1, "%d px", a, -10)
+    a = Slider(attachedGroup, "attachWidth",    "Width (of health bar)", 50, 100, 5, "%d %%", a, -8)
+    a = Slider(attachedGroup, "attachFontSize", "Font size",             6,  16, 1, "%d",    a, -8)
+    a = Slider(attachedGroup, "attachSpacing",  "Extra gap to health bar", 0, 8, 1, "%d px", a, -8)
+
+    local floatingGroup, f = Group()
+    f = Slider(floatingGroup, "width",    "Width",           40, 160, 2, "%d px", f, -10)
+    f = Slider(floatingGroup, "height",   "Bar height",       6,  24, 1, "%d px", f, -8)
+    f = Slider(floatingGroup, "fontSize", "Font size",        7,  20, 1, "%d",    f, -8)
+    f = Slider(floatingGroup, "offsetY",  "Vertical offset", -30, 30, 1, "%d px", f, -8)
+
+    function ns.UpdateSizeGroups()
+        local attached = ns.db.attach and ns.db.style ~= "text"
+        attachedGroup:SetShown(attached)
+        floatingGroup:SetShown(not attached)
+    end
 
     -- Right column: preview ---------------------------------------------
     local box = CreateFrame("Frame", nil, panel)
@@ -381,10 +489,23 @@ local function BuildPanel()
     previews[2] = CreateMockPlate(box, "Defias Bandit",   0, -135)
     previews[3] = CreateMockPlate(box, "Hogger",          0, -230)
 
+    -- Right column: behavior, below the preview ---------------------------
+    local boxAnchor = CreateFrame("Frame", nil, panel)
+    boxAnchor:SetSize(1, 1)
+    boxAnchor:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, 0)
+
+    h = SectionHeader(panel, "Behavior", boxAnchor, -16, 250)
+    local holder = Slider(panel, "warnAt", "Warning color at", 50, 99, 1, "%d %%", h, -10)
+    holder:SetWidth(250)
+    a = Checkbox(panel, "hideZero", "Hide at 0% threat",
+        "Hides the display while you have no threat on that enemy.", holder, -6)
+    a = Checkbox(panel, "hideSolo", "Only show in a group",
+        "Hides threat while you are playing solo.", a, -2)
+
     -- Footer ------------------------------------------------------------
     local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     reset:SetSize(140, 22)
-    reset:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -10)
+    reset:SetPoint("TOPLEFT", a, "BOTTOMLEFT", 0, -12)
     reset:SetText("Reset to defaults")
     reset:SetScript("OnClick", function()
         for k, v in pairs(ns.defaults) do ns.db[k] = v end
@@ -393,7 +514,7 @@ local function BuildPanel()
     end)
 
     local hint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-    hint:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -14)
+    hint:SetPoint("TOPLEFT", reset, "BOTTOMLEFT", 0, -10)
     hint:SetText("Commands: /mthreat tank, /mthreat dps, /mthreat debug")
 
     panel:SetScript("OnShow", RefreshAll)

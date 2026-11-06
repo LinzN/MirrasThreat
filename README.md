@@ -7,6 +7,8 @@ A lightweight WoW Forever addon that shows your threat on enemy nameplates as a 
 ## Features
 
 - Threat bar and percentage below every enemy nameplate, styled like the resource bars: rounded frame, glossy fill
+- **Part of the nameplate** (default): the bar sits directly under the health bar in Blizzard's own nameplate look (same bar art, background and font), inside the yellow target border and darkened like the health bar when the enemy is not your target. The percentage is inside the bar; height, width, font size and gap are adjustable. When the enemy casts, its cast bar appears below the threat bar instead of pushing it away. Works with every Blizzard nameplate size (small to huge) and style (modern and classic); the bar height scales with the nameplate
+- Other nameplate addons: the bar falls back to the floating style below the nameplate
 - Role-aware colors
   - **Tank:** green while you hold aggro, yellow when losing it, red once lost
 - **Tank extras**
@@ -15,7 +17,7 @@ A lightweight WoW Forever addon that shows your threat on enemy nameplates as a 
   - **DPS / Healer:** green while safe, yellow when close to pulling, red once you pull aggro
 - Three styles: bar + text, bar only, text only
 - Text position inside the bar: left, center or right
-- Adjustable width, bar height, font size, vertical offset and warning threshold
+- Adjustable attached bar height; for the floating style width, bar height, font size and vertical offset; warning threshold
 - Optional: hide at 0 % threat, only show while in a group
 - Settings panel with live preview under **Options → AddOns → Mirra's Threat**
 - Works with WoW Forever secret values (Interface 16001)

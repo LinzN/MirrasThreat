@@ -342,7 +342,7 @@ function ns.RefreshPreview()
         if modern and isTarget then
             p.sel:SetAtlas("UI-HUD-CoolDownManager-Selected-yellow")
             p.sel:SetPoint("TOPLEFT", p.hpBorder, "TOPLEFT", -3, 2)
-            p.sel:SetPoint("BOTTOMRIGHT", w.plateBg, "BOTTOMRIGHT", 0, 2)
+            p.sel:SetPoint("BOTTOMRIGHT", w.bg, "BOTTOMRIGHT", 0, 2)
             p.sel:Show()
         else
             p.sel:Hide()

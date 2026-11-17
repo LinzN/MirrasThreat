@@ -156,23 +156,7 @@ function ns.CreateWidget(parent)
     w.trough:SetTexture(FLAT)
     w.trough:SetVertexColor(0.03, 0.03, 0.04, 0.9)
 
-    -- Blizzard's nameplate bar background, drawn unchanged but clipped at
-    -- the top: its top edge is cut off, so the health bar's bottom line is
-    -- the only line between the two bars (stretching the art instead would
-    -- shift the frame against the bar)
-    w.bgClip = CreateFrame("Frame", nil, w)
-    w.bgClip:SetFrameLevel(w:GetFrameLevel())
-    w.bgClip:SetClipsChildren(true)
-    -- the art lives on a child frame: child frames are always clipped
-    w.bgArt = CreateFrame("Frame", nil, w.bgClip)
-    w.bgArt:SetFrameLevel(w:GetFrameLevel())
-    w.plateBg = w.bgArt:CreateTexture(nil, "BACKGROUND")
-    w.plateBg:SetAllPoints()
-    w.plateBg:SetAtlas(PLATE_BG_ATLAS)
-    w.bgClip:Hide()
-
     w.bar = CreateFrame("StatusBar", nil, w)
-    w.bar:SetFrameLevel(w:GetFrameLevel() + 1)
     w.bar:SetStatusBarTexture(BAR_TEXTURE)
     w.bar:SetMinMaxValues(0, 100)
     w.bar:SetValue(0)
@@ -278,6 +262,12 @@ local function SetBarTextures(w, plateLook)
             b:GetStatusBarTexture():SetAtlas(PLATE_BAR_ATLAS)
         end
     end
+    if plateLook then
+        w.bg:SetAtlas(PLATE_BG_ATLAS)
+    else
+        w.bg:SetTexture(FLAT)
+        w.bg:SetTexCoord(0, 1, 0, 1)
+    end
 end
 
 -- Attached scale: the settings are for a medium nameplate.
@@ -312,7 +302,6 @@ function ns.LayoutWidget(w)
     w.trough:Hide()
 
     w.dim:Hide()
-    w.bgClip:Hide()
     w.attachedModern = false
 
     if showBar and w.attached then
@@ -327,24 +316,18 @@ function ns.LayoutWidget(w)
 
         w.bar:ClearAllPoints()
         w.bg:ClearAllPoints()
-        w.bgClip:ClearAllPoints()
-        w.bgArt:ClearAllPoints()
         if modern then
-            -- exactly like Blizzard's health bar background (same offsets),
-            -- only the part above the bar is clipped away: the health bar's
-            -- bottom line is the threat bar's top line
+            -- exactly like Blizzard's health bar: bar fills the frame, the
+            -- background atlas (with its soft shadow) reaches out around it
+            -- no top edge of its own: the health bar's bottom line is
+            -- the threat bar's top line, so both read as one piece
             w.bar:SetAllPoints()
-            w.bgArt:SetPoint("TOPLEFT", w.bar, "TOPLEFT", -2, 3)
-            w.bgArt:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 6, -6)
-            w.bgClip:SetPoint("TOPLEFT", w.bar, "TOPLEFT", -2, 0)
-            w.bgClip:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 6, -6)
-            w.bgClip:Show()
-            w.bg:Hide()
+            w.bg:SetPoint("TOPLEFT", w.bar, "TOPLEFT", -2, 0)
+            w.bg:SetPoint("BOTTOMRIGHT", w.bar, "BOTTOMRIGHT", 6, -6)
+            w.bg:SetVertexColor(1, 1, 1, 1)
             w.dim:SetAtlas(PLATE_DESELECT_ATLAS)
             w.tick:SetVertexColor(0, 0, 0, 0.35)
         else
-            w.bgClip:Hide()
-            w.bg:Show()
             -- classic style: flat black edge
             w.bg:SetAllPoints()
             w.bg:SetVertexColor(0, 0, 0, 1)
@@ -357,6 +340,7 @@ function ns.LayoutWidget(w)
             w.bar:SetPoint("BOTTOMRIGHT", -1, 1)
             w.tick:SetVertexColor(1, 0.85, 0.35, 0.9)
         end
+        w.bg:Show()
         w.bar:Show()
         w.warnBar:Show()
         w.highBar:Show()
@@ -841,7 +825,7 @@ function ns.LinkPlate(uf, w)
         -- one yellow frame around health bar and threat bar
         local ok = pcall(function()
             local o = NamePlateConstants and NamePlateConstants.SELECTED_BORDER_OFFSETS
-            hb.selectedBorder:SetPoint("BOTTOMRIGHT", w.plateBg, "BOTTOMRIGHT",
+            hb.selectedBorder:SetPoint("BOTTOMRIGHT", w.bg, "BOTTOMRIGHT",
                 o and o.bottomRightX or 0, o and o.bottomRightY or 0)
         end)
         if ok then linkedBorder[uf] = true end
